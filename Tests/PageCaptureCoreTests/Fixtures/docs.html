@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Docs</title>
+<style>
+  body { margin: 0; padding-top: 60px; font: 16px/1.4 sans-serif; }
+  header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: #eee; }
+  nav { float: left; width: 200px; }
+  nav li { height: 30px; }
+  main { margin-left: 220px; margin-right: 20px; }
+  section { min-height: 450px; }
+  #code { height: 120px; overflow: auto; }
+  #code p { height: 40px; margin: 0; }
+  .panel[hidden] { display: none; }
+  footer { clear: both; height: 200px; }
+</style>
+</head>
+<body>
+<!-- A documentation page: the document scrolls, the article scrolls with it. -->
+<header>Site header text</header>
+<nav><ul id="navlist"></ul></nav>
+<main>
+  <article id="article">
+    <section id="s1"><h2>Section One</h2><p>Section one text.</p>
+      <div id="code"><p>Code line 1</p><p>Code line 2</p><p>Code line 3</p><p>Code line 4</p><p>Code line 5</p></div>
+    </section>
+    <section id="s2"><h2>Section Two</h2><p>Section two text.</p>
+      <button id="acc" aria-expanded="false" aria-controls="accpanel">Accordion header</button>
+      <div id="accpanel" class="panel" hidden><p>Accordion panel text.</p></div>
+    </section>
+    <section id="s3"><h2>Section Three</h2><p>Section three text.</p></section>
+    <section id="s4"><h2>Section Four</h2><p>Section four text.</p></section>
+    <section id="s5"><h2>Section Five</h2><p>Section five text.</p>
+      <img id="lazy" data-src="pics/lazy-real.png" alt="Lazy picture" width="100" height="100">
+    </section>
+    <section id="s6"><h2>Section Six</h2><p>Section six text.</p></section>
+  </article>
+</main>
+<footer>Site footer text</footer>
+<script>
+  const navlist = document.getElementById('navlist');
+  for (let i = 1; i <= 40; i++) {
+    const li = document.createElement('li');
+    li.innerHTML = '<a href="#">Nav link ' + i + '</a>';
+    navlist.appendChild(li);
+  }
+  const acc = document.getElementById('acc');
+  acc.addEventListener('click', () => {
+    const open = acc.getAttribute('aria-expanded') !== 'true';
+    acc.setAttribute('aria-expanded', String(open));
+    document.getElementById('accpanel').hidden = !open;
+  });
+  // The image gets its source only once it is scrolled into view.
+  const lazy = document.getElementById('lazy');
+  function loadLazy() {
+    if (lazy.hasAttribute('src')) return;
+    const r = lazy.getBoundingClientRect();
+    if (r.top < window.innerHeight && r.bottom > 0) lazy.src = lazy.dataset.src;
+  }
+  window.addEventListener('scroll', loadLazy);
+</script>
+</body>
+</html>

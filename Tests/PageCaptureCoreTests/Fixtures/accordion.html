@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Accordions</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  .panel { display: none; }
+  .panel.open { display: block; }
+  .slide { height: 0; overflow: hidden; }
+  .slide.open { height: auto; }
+</style>
+</head>
+<body>
+<h1>Course page</h1>
+
+<!-- (a) Non-exclusive accordion: panels hidden by a CSS class, triggers name them with aria-controls. -->
+<section id="plain">
+  <h3><button id="a1" aria-expanded="false" aria-controls="pa1">Expressive and Creative Language Generation</button></h3>
+  <div id="pa1" class="panel"><p>Alpha panel text.</p><ul><li>Alpha bullet one</li><li>Alpha bullet two</li></ul></div>
+  <h3><button id="a2" aria-expanded="false" aria-controls="pa2">Summarisation Header</button></h3>
+  <div id="pa2" class="panel"><p>Bravo panel text.</p></div>
+</section>
+
+<!-- (b) Exclusive accordion that unmounts closed content (React style), panel hidden by the
+     attribute, first item open. -->
+<section id="exclusive">
+  <div><button class="ex" aria-expanded="true" aria-controls="pb1">Exclusive Header One</button>
+    <div id="pb1" role="region"></div></div>
+  <div><button class="ex" aria-expanded="false" aria-controls="pb2">Exclusive Header Two</button>
+    <div id="pb2" role="region" hidden></div></div>
+  <div><button class="ex" aria-expanded="false" aria-controls="pb3">Exclusive Header Three</button>
+    <div id="pb3" role="region" hidden></div></div>
+</section>
+
+<!-- (b2) Exclusive accordion without aria-controls: the panel is the next element, collapsed to zero
+     height by a class; content stays in the page. -->
+<section id="sliding">
+  <div class="sl" role="button" aria-expanded="false">Sliding Header One</div>
+  <div class="slide"><p>Echo slide text.</p></div>
+  <div class="sl" role="button" aria-expanded="false">Sliding Header Two</div>
+  <div class="slide"><p>Foxtrot slide text.</p></div>
+</section>
+
+<!-- (c) Details, one standalone and an exclusive pair. -->
+<details id="d1"><summary>Details Summary One</summary><p>Golf details text.</p></details>
+<details name="pair"><summary>Details Summary Two</summary><p>Hotel details text.</p></details>
+<details name="pair"><summary>Details Summary Three</summary><p>India details text.</p></details>
+
+<!-- (d) Must not be clicked: a navigating link, a menu button and a form submit. -->
+<nav>
+  <a id="navlink" href="/elsewhere.html" aria-expanded="false" aria-controls="pd1">Navigating link</a>
+  <div id="pd1" hidden>Link panel</div>
+  <button id="menu" aria-haspopup="menu" aria-expanded="false" aria-controls="pd2">Menu</button>
+  <ul id="pd2" hidden><li>Menu item</li></ul>
+  <form action="/submitted.html"><button id="submit" aria-expanded="false" aria-controls="pd3">Send</button></form>
+  <div id="pd3" hidden>Form panel</div>
+</nav>
+
+<h2 id="next">Next section</h2>
+<p>After the accordions.</p>
+
+<script>
+  window.clicked = [];
+  document.addEventListener('click', (e) => { window.clicked.push(e.target.id || e.target.className); });
+
+  for (const b of document.querySelectorAll('#plain button')) {
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      b.setAttribute('aria-expanded', String(open));
+      document.getElementById(b.getAttribute('aria-controls')).classList.toggle('open', open);
+    });
+  }
+
+  // Panel content lives in the script and is only in the page while its panel is open. The direct
+  // text node checks that a closed panel keeps the content it had while open.
+  const content = {
+    pb1: 'Charlie direct text.<p>Charlie panel text.</p>',
+    pb2: '<p>Delta panel text.</p><ul><li>Delta bullet</li></ul>',
+    pb3: '<p>Kilo panel text.</p>',
+  };
+  const ex = document.querySelectorAll('#exclusive button');
+  function openExclusive(target) {
+    for (const b of ex) {
+      const open = b === target;
+      const panel = document.getElementById(b.getAttribute('aria-controls'));
+      b.setAttribute('aria-expanded', String(open));
+      panel.hidden = !open;
+      panel.innerHTML = open ? content[panel.id] : '';
+    }
+  }
+  for (const b of ex) b.addEventListener('click', () => openExclusive(b));
+  openExclusive(ex[0]);
+
+  const sl = document.querySelectorAll('#sliding .sl');
+  for (const h of sl) {
+    h.addEventListener('click', () => {
+      for (const o of sl) {
+        const open = o === h;
+        o.setAttribute('aria-expanded', String(open));
+        o.nextElementSibling.classList.toggle('open', open);
+      }
+    });
+  }
+
+  document.getElementById('menu').addEventListener('click', (e) => {
+    e.currentTarget.setAttribute('aria-expanded', 'true');
+    document.getElementById('pd2').hidden = false;
+  });
+</script>
+</body>
+</html>

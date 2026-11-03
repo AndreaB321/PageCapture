@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture App</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  /* An app shell: viewport-high boxes that clip, the content scrolling in an inner area. */
+  .app { height: 100vh; overflow: hidden; }
+  .main { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+  #scroller { flex: 1; min-height: 0; max-height: 400px; overflow: auto; }
+  #scroller p { height: 40px; margin: 0; }
+</style>
+</head>
+<body>
+<div class="app"><div class="main"><div id="scroller"></div></div></div>
+<script>
+  const scroller = document.getElementById('scroller');
+  for (let i = 1; i <= 50; i++) {
+    const p = document.createElement('p');
+    p.id = 'line' + i;
+    p.textContent = 'Line ' + i;
+    scroller.appendChild(p);
+  }
+</script>
+</body>
+</html>

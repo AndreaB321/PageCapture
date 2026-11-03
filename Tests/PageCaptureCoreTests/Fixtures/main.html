@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Main</title>
+<link rel="stylesheet" href="/styles/main.css">
+<style>#list { height: 200px; overflow: auto; } .row { height: 40px; margin: 0; }</style>
+</head>
+<body>
+<h1>Main heading</h1>
+<div id="list"><div id="inner"></div></div>
+<iframe id="frame" src="pctest://frame.test/docs/frame.html" style="width: 400px; height: 200px; border: 0"></iframe>
+<script>
+  // Virtualised list: 60 rows of 40px. Only rows near the visible window are in the DOM, and every
+  // render replaces them with new nodes.
+  const list = document.getElementById('list');
+  const inner = document.getElementById('inner');
+  const ROWS = 60, H = 40;
+  function render() {
+    const first = Math.max(0, Math.floor(list.scrollTop / H) - 1);
+    const last = Math.min(ROWS, Math.ceil((list.scrollTop + list.clientHeight) / H) + 1);
+    inner.style.paddingTop = first * H + 'px';
+    inner.style.height = (ROWS - first) * H + 'px';
+    inner.innerHTML = '';
+    for (let i = first; i < last; i++) {
+      const p = document.createElement('p');
+      p.className = 'row';
+      p.innerHTML = 'Row ' + String(i).padStart(3, '0') + ' <img src="img/row' + i + '.png" alt="">';
+      inner.appendChild(p);
+    }
+  }
+  list.addEventListener('scroll', render);
+  render();
+</script>
+</body>
+</html>

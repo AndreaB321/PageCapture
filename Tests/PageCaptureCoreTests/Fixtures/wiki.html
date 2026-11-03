@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Wiki</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  .page { display: flex; }
+  .column-start { flex: none; width: 120px; }
+  /* As in Wikipedia's Vector 2022 skin: <main> is a grid whose right column holds the page's settings
+     beside the title bar, the tool bar and the article. */
+  main { flex: 1; min-width: 0; display: grid; column-gap: 24px; align-items: start;
+         grid-template-columns: minmax(0, 1fr) 180px;
+         grid-template-areas: 'titlebar column-end' 'toolbar column-end' 'content column-end'; }
+  .titlebar { grid-area: titlebar; display: flex; justify-content: space-between; align-items: baseline; }
+  .toolbar { grid-area: toolbar; display: flex; justify-content: space-between; }
+  .toolbar ul { display: flex; gap: 12px; list-style: none; margin: 0; padding: 0; }
+  .column-end { grid-area: column-end; position: sticky; top: 0; }
+  #bodyContent { grid-area: content; }
+  figure img { display: block; width: 120px; height: 80px; }
+  section { min-height: 300px; }
+</style>
+</head>
+<body>
+<!-- A Wikipedia article in the Vector 2022 skin: <main> also holds the page's tool bars and, in a
+     column beside the article, its appearance settings. -->
+<div class="page">
+  <div class="column-start"><nav aria-label="Contents"><a href="#s1">Contents link</a></nav></div>
+  <main id="content">
+    <header class="titlebar">
+      <h1 id="firstHeading">Matrix (mathematics)</h1>
+      <button id="lang" type="button">96 languages</button>
+    </header>
+    <div class="toolbar">
+      <nav aria-label="Namespaces"><ul><li><a href="#">Article</a></li><li><a href="#">Talk</a></li></ul></nav>
+      <nav aria-label="Views"><ul><li><a href="#">Read</a></li><li><a href="#">Edit</a></li><li><a href="#">View history</a></li></ul></nav>
+    </div>
+    <div class="column-end" id="column">
+      <div class="pinned-container">
+        <nav aria-label="Appearance">
+          <div class="pinnable-header">Appearance</div>
+          <div class="menu-heading">Text</div>
+          <label><input type="radio" name="text"> Small</label>
+          <label><input type="radio" name="text" checked> Standard</label>
+          <label><input type="radio" name="text"> Large</label>
+          <div class="menu-heading">Width</div>
+          <label><input type="radio" name="width" checked> Standard</label>
+          <label><input type="radio" name="width"> Wide</label>
+          <div class="menu-heading">Color (beta)</div>
+          <label><input type="radio" name="color" checked> Automatic</label>
+          <label><input type="radio" name="color"> Light</label>
+          <label><input type="radio" name="color"> Dark</label>
+        </nav>
+      </div>
+    </div>
+    <div id="bodyContent">
+      <div id="mw-content-text">
+        <div class="mw-parser-output">
+          <p id="lead">In mathematics, a matrix is a rectangular array of numbers or other mathematical objects
+            with elements arranged in rows and columns.</p>
+          <figure id="fig"><img src="pics/matrix.png" alt="An m by n matrix"><figcaption>An m-by-n matrix.</figcaption></figure>
+          <table id="tbl"><tr><th>Entry</th><td>Row one, column two</td></tr></table>
+          <section id="s1"><h2>Definition</h2><p>A matrix is arranged in rows and columns of entries.</p>
+            <aside class="note"><p>A note in the text.</p></aside></section>
+          <section id="s2"><h2>Notation</h2><p>Matrices are commonly written in square brackets.</p></section>
+          <!-- The longest section: more than half of the text, yet only part of the text column. -->
+          <section id="s3"><h2>Basic operations</h2><p>Addition and multiplication by a scalar work entrywise.
+            Each entry of the sum is the sum of the entries in the same row and column of the two matrices. Each entry of the sum is the sum of the entries in the same row and column of the two matrices. Each entry of the sum is the sum of the entries in the same row and column of the two matrices. Each entry of the sum is the sum of the entries in the same row and column of the two matrices. Each entry of the sum is the sum of the entries in the same row and column of the two matrices. Each entry of the sum is the sum of the entries in the same row and column of the two matrices. Each entry of the sum is the sum of the entries in the same row and column of the two matrices.</p></section>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

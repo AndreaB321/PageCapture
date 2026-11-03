@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Hidden Content</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  .lang-menu { display: none; }
+  .lang-check:checked ~ .lang-menu { display: block; }
+  .tp:not(.on) { display: none; }
+  .acc-panel { display: none; }
+  .acc-panel.open { display: block; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1>Matrix article</h1>
+
+<!-- (a) Wikipedia-style language control: a checkbox, its label and a dropdown hidden until opened. -->
+<div class="langs">
+  <input type="checkbox" id="lang-toggle" class="lang-check">
+  <label for="lang-toggle" id="lang-label">96 languages</label>
+  <div class="lang-menu">
+    <ul>
+      <li><a href="https://de.example.org/">Deutsch</a></li>
+      <li><a href="https://fr.example.org/">Français</a></li>
+      <li><a href="https://es.example.org/">Español</a></li>
+    </ul>
+  </div>
+</div>
+
+<p id="lead">A matrix is a rectangular array of numbers.</p>
+<p id="teaser">Teaser seen before it was hidden.</p>
+
+<!-- (b) Tabs: the second panel is display:none once the first tab is selected again. -->
+<h2>Tabbed section</h2>
+<div role="tablist">
+  <button id="tab1" role="tab" aria-controls="tp1" aria-selected="true">First Tab Title</button>
+  <button id="tab2" role="tab" aria-controls="tp2" aria-selected="false">Second Tab Title</button>
+</div>
+<div id="tp1" class="tp on" role="tabpanel"><p>First tab panel text.</p></div>
+<div id="tp2" class="tp" role="tabpanel"><p>Second tab panel text.</p></div>
+
+<!-- (c) Accordion panel the page collapses again shortly after it is opened. -->
+<h2>Accordion section</h2>
+<button id="acc" aria-expanded="false" aria-controls="pc">Accordion Header</button>
+<div id="pc" class="acc-panel"><p>Accordion panel text.</p></div>
+
+<!-- (d) Visually hidden text for screen readers. -->
+<h2>Notes <span class="sr-only">Screen reader note</span></h2>
+
+<!-- (e) A picture with a source. -->
+<picture><source srcset="images/pixel.webp" type="image/webp"><img src="images/pixel.webp" alt="Pixel picture"></picture>
+
+<p>End of article.</p>
+
+<script>
+  for (const t of document.querySelectorAll('[role="tab"]')) {
+    t.addEventListener('click', () => {
+      for (const o of document.querySelectorAll('[role="tab"]')) {
+        const on = o === t;
+        o.setAttribute('aria-selected', String(on));
+        document.getElementById(o.getAttribute('aria-controls')).classList.toggle('on', on);
+      }
+    });
+  }
+
+  // Opening the accordion hides the teaser, and the page collapses the panel again soon after.
+  const acc = document.getElementById('acc');
+  acc.addEventListener('click', () => {
+    acc.setAttribute('aria-expanded', 'true');
+    document.getElementById('pc').classList.add('open');
+    document.getElementById('teaser').style.display = 'none';
+    setTimeout(() => {
+      acc.setAttribute('aria-expanded', 'false');
+      document.getElementById('pc').classList.remove('open');
+    }, 150);
+  });
+</script>
+</body>
+</html>

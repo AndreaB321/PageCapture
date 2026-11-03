@@ -1,0 +1,31 @@
+<!doctype html>
+<html class="theme-x" lang="en" onclick="void 0">
+<head>
+<meta charset="utf-8">
+<title>Fixture Column</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  /* The column is centred and spaced by rules on <html> and on its parent, as on many documentation sites. */
+  html.theme-x .layout > .col { max-width: 600px; margin: 0 auto; }
+  .col > * { margin-top: 0; margin-bottom: 0; }
+  .col > * + * { margin-top: 20px; }
+  /* A figure centres itself by its own class. */
+  figure.wide { max-width: 600px; margin-left: auto; margin-right: auto; }
+  figure.wide img { display: block; width: 100%; height: 100px; }
+  .layout { position: relative; }
+  .sidebar { position: absolute; left: 0; top: 0; width: 180px; }
+</style>
+</head>
+<body class="page">
+<!-- A docs layout: the sidebar beside the centred article column. -->
+<div class="layout" onclick="void 0" src="pics/no.png" data-keep="yes" data-link="javascript:void 0">
+  <nav class="sidebar"><a href="#">Sidebar link</a></nav>
+  <article id="col" class="col">
+    <p id="p1">First paragraph of the article, long enough to wrap across the column at its full width.</p>
+    <p id="p2">Second paragraph of the article.</p>
+    <figure id="fig" class="wide"><img src="pics/wide.png" alt="Wide picture"></figure>
+    <p id="p3">Third paragraph of the article.</p>
+  </article>
+</div>
+</body>
+</html>

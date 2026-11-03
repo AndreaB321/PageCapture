@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Frame</title>
+<link rel="stylesheet" href="frame.css">
+<style>p { height: 30px; margin: 0; }</style>
+</head>
+<body>
+<a id="rel" href="../other/page.html">relative link</a>
+<a id="js" href=" JavaScript:alert(1)" onclick="alert(2)" onMouseOver="alert(3)">script link</a>
+<img id="pic" src="pics/a.png" srcset="pics/a.png 1x, pics/b.png 2x" alt="">
+<div id="feed"></div>
+<script>
+  // Infinite feed: 100 entries, 10 more loaded 100 ms after scrolling near the bottom.
+  const feed = document.getElementById('feed');
+  let count = 0, loading = false;
+  function more() {
+    for (let n = 0; n < 10 && count < 100; n++, count++) {
+      const p = document.createElement('p');
+      p.textContent = 'Entry ' + String(count).padStart(3, '0');
+      feed.appendChild(p);
+    }
+  }
+  more(); more();
+  window.addEventListener('scroll', () => {
+    if (loading || count >= 100) return;
+    if (scrollY + innerHeight >= document.documentElement.scrollHeight - 50) {
+      loading = true;
+      setTimeout(() => { more(); loading = false; }, 100);
+    }
+  });
+</script>
+</body>
+</html>

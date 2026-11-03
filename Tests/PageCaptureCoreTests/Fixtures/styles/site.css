@@ -1,0 +1,8 @@
+@charset "utf-8";
+/* url(not-a-reference.png) in a comment */
+@import "imported.css";
+@font-face { font-family: "Fixture Sans"; src: url(../fonts/fixture.woff2) format("woff2"); }
+.brand { color: rgb(1, 2, 3); font-family: "Fixture Sans", sans-serif; }
+.hero { background-image: url('/img/hero.png'); min-height: 10px; }
+.tab-content > .tab-pane { display: none; }
+.tab-content > .active { display: block; }

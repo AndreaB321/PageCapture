@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Tabs</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  .tab-content > .tab-pane { display: none; }
+  .tab-content > .active { display: block; }
+  .lp:not(.on) { display: none; }
+</style>
+</head>
+<body>
+<h1>Course page</h1>
+
+<!-- (a) Bootstrap tabs: the inactive pane is hidden by its class, and filled when its tab is first shown. -->
+<h2>Model sources</h2>
+<ul class="nav nav-tabs" role="tablist">
+  <li class="nav-item"><a id="t-src" class="nav-link active" data-toggle="tab" href="#p1" role="tab" aria-controls="p1" aria-selected="true">The Source - Model Hubs</a></li>
+  <li class="nav-item"><a id="t-svc" class="nav-link" data-toggle="tab" href="#p2" role="tab" aria-controls="p2" aria-selected="false">The Service - Cloud AI Platforms</a></li>
+</ul>
+<div class="tab-content">
+  <div class="tab-pane active" id="p1" role="tabpanel" aria-labelledby="t-src"><ul><li>Hub bullet one</li><li>Hub bullet two</li></ul></div>
+  <div class="tab-pane" id="p2" role="tabpanel" aria-labelledby="t-svc"></div>
+</div>
+
+<!-- (b) Button tabs, the second selected: only the selected panel has content (React style). -->
+<h2>Button tabs</h2>
+<div class="bt">
+  <button id="b1" role="tab" aria-controls="bp1" aria-selected="false">Button Tab One</button>
+  <button id="b2" role="tab" aria-controls="bp2" aria-selected="true">Button Tab Two</button>
+</div>
+<div id="bp1" role="tabpanel" hidden></div>
+<div id="bp2" role="tabpanel" hidden></div>
+
+<!-- (c) Tabs without roles, linked only by href in a .nav-tabs list; one link navigates. -->
+<h2>Plain tabs</h2>
+<ul class="nav nav-tabs plain">
+  <li class="active"><a href="#q1">Plain Tab One</a></li>
+  <li><a href="#q2">Plain Tab Two</a></li>
+  <li><a id="navlink" href="/elsewhere.html">Elsewhere</a></li>
+</ul>
+<div class="tab-content">
+  <div class="tab-pane active" id="q1"><p>Plain panel one text.</p></div>
+  <div class="tab-pane" id="q2"></div>
+</div>
+
+<!-- (d) Panels found by aria-labelledby; a popup tab must not be clicked. -->
+<h2>Labelled tabs</h2>
+<div role="tablist">
+  <button id="l1" role="tab" aria-selected="true">Labelled Tab One</button>
+  <button id="l2" role="tab" aria-selected="false">Labelled Tab Two</button>
+  <button id="l3" role="tab" aria-selected="false" aria-haspopup="menu">Labelled Menu</button>
+</div>
+<div class="lp on" role="tabpanel" aria-labelledby="l1"><p>Labelled panel one text.</p></div>
+<div class="lp" role="tabpanel" aria-labelledby="l2"><p>Labelled panel two text.</p></div>
+
+<h2 id="next">Next section</h2>
+<p>After the tabs.</p>
+
+<script>
+  window.clicked = [];
+  document.addEventListener('click', (e) => { window.clicked.push(e.target.id || e.target.textContent); });
+
+  // (a)
+  for (const a of document.querySelectorAll('[data-toggle="tab"]')) {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      for (const o of document.querySelectorAll('[data-toggle="tab"]')) {
+        const on = o === a;
+        o.classList.toggle('active', on);
+        o.setAttribute('aria-selected', String(on));
+        document.getElementById(o.getAttribute('aria-controls')).classList.toggle('active', on);
+      }
+      const p2 = document.getElementById('p2');
+      if (a.id === 't-svc' && !p2.innerHTML) {
+        p2.innerHTML = '<p>Most businesses will not use models directly from a hub.</p><ul><li>Platform bullet one</li></ul>';
+      }
+    });
+  }
+
+  // (b)
+  const bContent = { bp1: '<p>Button panel one text.</p>', bp2: '<p>Button panel two text.</p>' };
+  function selectButton(target) {
+    for (const b of document.querySelectorAll('.bt [role="tab"]')) {
+      const on = b === target;
+      const panel = document.getElementById(b.getAttribute('aria-controls'));
+      b.setAttribute('aria-selected', String(on));
+      panel.hidden = !on;
+      panel.innerHTML = on ? bContent[panel.id] : '';
+    }
+  }
+  for (const b of document.querySelectorAll('.bt [role="tab"]')) b.addEventListener('click', () => selectButton(b));
+  selectButton(document.getElementById('b2'));
+
+  // (c)
+  for (const a of document.querySelectorAll('.plain a[href^="#"]')) {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      for (const o of document.querySelectorAll('.plain a[href^="#"]')) {
+        const on = o === a;
+        o.parentElement.classList.toggle('active', on);
+        document.querySelector(o.getAttribute('href')).classList.toggle('active', on);
+      }
+      const q2 = document.getElementById('q2');
+      if (a.getAttribute('href') === '#q2' && !q2.innerHTML) q2.innerHTML = '<p>Plain panel two text.</p>';
+    });
+  }
+
+  // (d)
+  for (const b of document.querySelectorAll('#l1, #l2')) {
+    b.addEventListener('click', () => {
+      for (const o of document.querySelectorAll('#l1, #l2')) {
+        const on = o === b;
+        o.setAttribute('aria-selected', String(on));
+        document.querySelector('[aria-labelledby="' + o.id + '"]').classList.toggle('on', on);
+      }
+    });
+  }
+</script>
+</body>
+</html>

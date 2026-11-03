@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Videos</title>
+<style>video, iframe, .video-js { display: block; width: 320px; height: 180px; }</style>
+</head>
+<body>
+<h1>Videos</h1>
+<p>Before the videos.</p>
+<video id="file" src="media/clip.mp4" poster="posters/file.png" title="File clip"></video>
+<h2>Stream clip</h2>
+<video id="stream"></video>
+<h2>Player clip</h2>
+<div class="video-js" id="player" aria-label="Video Player">
+  <img class="vjs-poster" src="posters/player.png" alt="">
+  <button class="vjs-big-play-button" type="button" aria-label="Play Video">Play</button>
+</div>
+<div class="video-js" id="settings-player" aria-label="Video Player">
+  <button type="button" aria-label="Playback speed">1x</button>
+  <button type="button" title="Add to playlist">+</button>
+  <button type="button">Display settings</button>
+  <button type="button" aria-label="Play loop" aria-pressed="false">Loop</button>
+</div>
+<iframe id="youtube" src="https://www.youtube.com/embed/abc123" title="YouTube clip"></iframe>
+<iframe id="frame" src="pctest://frame.test/docs/video-frame.html"></iframe>
+<figure>
+  <video id="drm" src="protected/master.m3u8"></video>
+  <figcaption>Protected film</figcaption>
+</figure>
+<p>After the videos.</p>
+<script>
+  // Sets its HLS source only once play() is called.
+  const stream = document.getElementById('stream');
+  stream.addEventListener('play', () => {
+    if (stream.querySelector('source')) return;
+    const source = document.createElement('source');
+    source.src = 'streams/live.m3u8';
+    source.type = 'application/vnd.apple.mpegurl';
+    stream.appendChild(source);
+  });
+  // Click-to-load player: its <video> only appears once the big play button is clicked.
+  const player = document.getElementById('player');
+  player.querySelector('.vjs-big-play-button').addEventListener('click', () => {
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = false;
+    video.src = 'media/loaded.mp4';
+    video.id = 'loaded';
+    player.appendChild(video);
+    video.play().catch(() => {});
+  });
+  // Buttons that are not play buttons must never be clicked.
+  window.wrongClicks = [];
+  document.querySelectorAll('#settings-player button').forEach((b) => {
+    b.addEventListener('click', () => window.wrongClicks.push(b.textContent));
+  });
+</script>
+</body>
+</html>
