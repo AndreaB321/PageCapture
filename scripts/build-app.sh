@@ -3,6 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# CFBundleShortVersionString; make-source-bundle.sh names the sources bundle after it.
+APP_VERSION=0.1.0
+
 scripts/fetch-tools.sh
 
 swift build -c release --product PageCapture
@@ -25,8 +28,10 @@ for tool in ffmpeg ffprobe yt-dlp deno; do
     cp "build/tools/$tool" "$APP/Contents/Helpers/$tool"
 done
 cp build/notices/* "$APP/Contents/Resources/ThirdPartyNotices/"
+cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/ThirdPartyNotices/"
+cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -39,7 +44,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>PageCapture</string>
     <key>CFBundleDisplayName</key><string>PageCapture</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>

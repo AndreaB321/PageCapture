@@ -4,42 +4,18 @@
 #                                 remux plus poster-frame extraction only, no network protocols
 #   build/tools/yt-dlp            the official yt-dlp_macos release binary
 #   build/tools/deno              the official deno-aarch64-apple-darwin release binary
-# and their licence texts in build/notices/.
+# and their licence texts in build/notices/. Pins and the download helper are in tool-pins.sh.
 # Every download is pinned and checked against its SHA-256. Finished steps are skipped on reruns.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FFMPEG_VERSION=9.0.2
-FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
-YTDLP_VERSION=2026.10.26
-YTDLP_SHA256=0f922c15ccc0b83eefa1c8bc9104e434318c4bf16e408e1ee93b7745a6efe0aa
-YTDLP_LICENSE_SHA256=7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c
-DENO_VERSION=2.9.8
-DENO_SHA256=9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e
-DENO_LICENSE_SHA256=f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588
+. scripts/tool-pins.sh
 
-CACHE=build/tools-cache
 TOOLS=build/tools
 NOTICES=build/notices
+# The exact FFmpeg build recipe, for the corresponding-source bundle (make-source-bundle.sh).
+FFMPEG_BUILD_TXT="$CACHE/ffmpeg-build.txt"
 mkdir -p "$CACHE" "$TOOLS" "$NOTICES"
-
-# fetch URL DEST SHA256: downloads unless DEST already has the expected hash.
-fetch() {
-    local url=$1 dest=$2 sha=$3
-    if [[ -f "$dest" ]] && [[ "$(shasum -a 256 "$dest" | cut -d' ' -f1)" == "$sha" ]]; then
-        return
-    fi
-    echo "Downloading $url"
-    curl -fsSL --retry 3 -o "$dest.part" "$url"
-    local got
-    got="$(shasum -a 256 "$dest.part" | cut -d' ' -f1)"
-    if [[ "$got" != "$sha" ]]; then
-        rm -f "$dest.part"
-        echo "SHA-256 mismatch for $url: expected $sha, got $got" >&2
-        exit 1
-    fi
-    mv "$dest.part" "$dest"
-}
 
 # --- FFmpeg ----------------------------------------------------------------------------------
 # Only what PageCapture needs: joining local HLS (.ts or fMP4 segments, clear-key AES-128 through
@@ -63,7 +39,7 @@ FFMPEG_CONFIG=(
 FFMPEG_STAMP="$CACHE/ffmpeg.stamp"
 FFMPEG_WANT="$FFMPEG_VERSION ${FFMPEG_CONFIG[*]}"
 
-if [[ -x "$TOOLS/ffmpeg" && -x "$TOOLS/ffprobe" && -f "$FFMPEG_STAMP" ]] \
+if [[ -x "$TOOLS/ffmpeg" && -x "$TOOLS/ffprobe" && -f "$FFMPEG_STAMP" && -f "$FFMPEG_BUILD_TXT" ]] \
     && [[ "$(cat "$FFMPEG_STAMP")" == "$FFMPEG_WANT" ]]; then
     echo "ffmpeg $FFMPEG_VERSION: up to date"
 else
@@ -74,14 +50,36 @@ else
     tar -xf "$TARBALL" -C "$CACHE"
     echo "Building ffmpeg $FFMPEG_VERSION (log: $SRC/build.log)"
     # A clean environment keeps Homebrew's compilers, headers and pkg-config out of the build.
+    BUILD_ENV=(env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin 'HOME=$HOME')
+    JOBS="$(sysctl -n hw.ncpu)"
     (
         cd "$SRC"
         env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
             ./configure "${FFMPEG_CONFIG[@]}" >build.log 2>&1
         env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" \
-            make -j"$(sysctl -n hw.ncpu)" ffmpeg ffprobe >>build.log 2>&1
+            make -j"$JOBS" ffmpeg ffprobe >>build.log 2>&1
     ) || { tail -30 "$SRC/build.log" >&2; exit 1; }
     cp "$SRC/ffmpeg" "$SRC/ffprobe" "$TOOLS/"
+    {
+        echo "How the ffmpeg and ffprobe in PageCapture.app/Contents/Helpers were built"
+        echo
+        echo "Source: ffmpeg-$FFMPEG_VERSION.tar.xz, unmodified"
+        echo "  https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
+        echo "  SHA-256 $FFMPEG_SHA256"
+        echo "Built on: macOS $(sw_vers -productVersion) $(uname -m), Xcode SDK $(xcrun --show-sdk-version)"
+        echo "Compiler: $(/usr/bin/cc --version | head -1)"
+        echo
+        echo "Commands, run in the unpacked ffmpeg-$FFMPEG_VERSION directory (a clean environment"
+        echo "keeps Homebrew's compilers, headers and pkg-config out of the build):"
+        echo
+        echo "  ${BUILD_ENV[*]} ./configure ${FFMPEG_CONFIG[*]}"
+        echo "  ${BUILD_ENV[*]} make -j$JOBS ffmpeg ffprobe"
+        echo
+        echo "The resulting ffmpeg and ffprobe are copied into Contents/Helpers unchanged except for an"
+        echo "ad-hoc code signature (codesign --force -s -, scripts/build-app.sh). The build is static and"
+        echo "links only the system zlib and system frameworks. The scripts that do this are"
+        echo "scripts/fetch-tools.sh and scripts/build-app.sh in the PageCapture repository."
+    } >"$FFMPEG_BUILD_TXT"
     cp "$SRC/COPYING.LGPLv2.1" "$NOTICES/FFmpeg-COPYING.LGPLv2.1.txt"
     echo "$FFMPEG_WANT" >"$FFMPEG_STAMP"
 fi
@@ -103,22 +101,22 @@ Contents/Helpers/ffmpeg and Contents/Helpers/ffprobe with your own build.
 EOF
 
 # --- yt-dlp ----------------------------------------------------------------------------------
-YTDLP_RELEASE="https://github.com/yt-dlp/yt-dlp/releases/download/$YTDLP_VERSION"
 if [[ -x "$TOOLS/yt-dlp" ]] && [[ "$(shasum -a 256 "$TOOLS/yt-dlp" | cut -d' ' -f1)" == "$YTDLP_SHA256" ]]; then
     echo "yt-dlp $YTDLP_VERSION: up to date"
 else
     # The pinned hash must also be the one the release publishes in SHA2-256SUMS.
-    curl -fsSL --retry 3 -o "$CACHE/yt-dlp-SHA2-256SUMS" "$YTDLP_RELEASE/SHA2-256SUMS"
-    if ! grep -qx "$YTDLP_SHA256  yt-dlp_macos" "$CACHE/yt-dlp-SHA2-256SUMS"; then
-        echo "yt-dlp $YTDLP_VERSION SHA2-256SUMS does not list the pinned yt-dlp_macos hash" >&2
-        exit 1
-    fi
+    check_ytdlp_published "$YTDLP_SHA256" yt-dlp_macos
     fetch "$YTDLP_RELEASE/yt-dlp_macos" "$CACHE/yt-dlp_macos-$YTDLP_VERSION" "$YTDLP_SHA256"
     cp "$CACHE/yt-dlp_macos-$YTDLP_VERSION" "$TOOLS/yt-dlp"
     chmod 755 "$TOOLS/yt-dlp"
 fi
 fetch "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP_VERSION/LICENSE" \
     "$NOTICES/yt-dlp-LICENSE.txt" "$YTDLP_LICENSE_SHA256"
+# The licences of what the yt-dlp_macos executable bundles (Python and its packages); the combined
+# executable is GPLv3+, so the GPL text goes along.
+fetch "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP_VERSION/THIRD_PARTY_LICENSES.txt" \
+    "$NOTICES/yt-dlp-THIRD_PARTY_LICENSES.txt" "$YTDLP_THIRD_PARTY_SHA256"
+fetch "https://www.gnu.org/licenses/gpl-3.0.txt" "$NOTICES/GPL-3.0.txt" "$GPL3_SHA256"
 
 # --- Deno ------------------------------------------------------------------------------------
 DENO_STAMP="$CACHE/deno.stamp"
@@ -138,5 +136,10 @@ else
 fi
 fetch "https://raw.githubusercontent.com/denoland/deno/v$DENO_VERSION/LICENSE.md" \
     "$NOTICES/Deno-LICENSE.md" "$DENO_LICENSE_SHA256"
+# Deno publishes no third-party notices for its binary; it embeds V8 and ICU.
+fetch "https://raw.githubusercontent.com/denoland/v8/$V8_COMMIT/LICENSE" \
+    "$NOTICES/V8-LICENSE.txt" "$V8_LICENSE_SHA256"
+fetch_base64 "https://chromium.googlesource.com/chromium/deps/icu.git/+/$ICU_COMMIT/LICENSE?format=TEXT" \
+    "$NOTICES/ICU-LICENSE.txt" "$ICU_LICENSE_SHA256"
 
 echo "Tools ready in $TOOLS"

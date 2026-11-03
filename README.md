@@ -240,6 +240,15 @@ It needs Screen Recording permission for the app it runs from (the terminal).
 
 ### Bundled tools and licences
 
-To save videos, the app bundles ffmpeg and ffprobe (built from source by `scripts/fetch-tools.sh`,
-LGPL 2.1+), yt-dlp (Unlicense) and Deno (MIT) in `PageCapture.app/Contents/Helpers/`. Their licence
-texts are in `Contents/Resources/ThirdPartyNotices/`.
+PageCapture's own code is under the MIT licence ([LICENSE](LICENSE)). To save videos, the app
+bundles ffmpeg and ffprobe (built from source by `scripts/fetch-tools.sh`, LGPL 2.1+), yt-dlp (the
+official `yt-dlp_macos` executable, GPLv3+ as a whole) and Deno (MIT) in
+`PageCapture.app/Contents/Helpers/`. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists each
+one with its version, licence, what it contains and where its source is. The app carries that file
+and the licence texts in `Contents/Resources/ThirdPartyNotices/`.
+
+PageCapture uses code of [FFmpeg](https://ffmpeg.org) licensed under the
+[LGPLv2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). The corresponding source of
+the bundled tools (the FFmpeg source and its build recipe, and the yt-dlp source) is attached to
+each [GitHub release](../../releases) as `PageCapture-third-party-sources-<version>.tar`, next to the
+DMG. `scripts/make-source-bundle.sh` builds it.
