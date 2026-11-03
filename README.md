@@ -11,6 +11,8 @@ images and videos. A macOS app with its own built-in browser.
 permissions (Screen Recording, Accessibility…) are needed.
 
 1. Download `PageCapture.dmg` from the [latest release](https://github.com/AndreaB321/PageCapture/releases/latest).
+   You only need the DMG: the `PageCapture-third-party-sources` archive next to it is the source
+   code of the bundled tools, provided for licence compliance, and is not needed to install.
 2. Open it and drag **PageCapture** onto the **Applications** folder next to it. Then eject the
    PageCapture disk in the Finder sidebar.
 3. PageCapture is not signed with an Apple Developer ID, so macOS blocks it the first time.
