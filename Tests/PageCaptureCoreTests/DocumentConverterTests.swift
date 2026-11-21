@@ -193,6 +193,15 @@ final class DocumentConverterTests: XCTestCase {
         XCTAssertEqual(made.map(\.existed), [true])
     }
 
+    func testScannedPDFIsReadByOCRByDefault() async throws {
+        let scan = PDFTextRecognizerTests.scannedPDF([[.init(lines: ["PageCapture reads scanned pages"], top: 120)]])
+        defer { try? FileManager.default.removeItem(at: scan) }
+
+        let markdown = try await DocumentConverter(pythonURL: Self.python).markdown(forFile: scan)
+
+        XCTAssertTrue(PDFTextRecognizerTests.normalised(markdown).contains("pagecapture reads scanned pages"), markdown)
+    }
+
     func testPDFWithTextDoesNotUseTheFallback() async throws {
         let called = OSAllocatedUnfairLock(initialState: false)
         converter.pdfFallback = { _ in

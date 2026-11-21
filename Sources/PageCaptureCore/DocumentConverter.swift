@@ -40,12 +40,17 @@ public struct DocumentConverter: Sendable {
         pythonURL: URL = DocumentConverter.bundledPythonURL,
         timeout: Duration = .seconds(120),
         maxOutputBytes: Int = 50 << 20,
-        pdfFallback: (@Sendable (URL) async throws -> String)? = nil
+        pdfFallback: (@Sendable (URL) async throws -> String)? = DocumentConverter.recognizeScannedPDF
     ) {
         self.pythonURL = pythonURL
         self.timeout = timeout
         self.maxOutputBytes = maxOutputBytes
         self.pdfFallback = pdfFallback
+    }
+
+    /// The default `pdfFallback`: on-device Vision OCR of the PDF's pages (`PDFTextRecognizer`).
+    public static let recognizeScannedPDF: @Sendable (URL) async throws -> String = { url in
+        try await PDFTextRecognizer.markdown(fromPDF: url)
     }
 
     /// `markitdown/bin/python3` in `Contents/Helpers` of the app (a link to `Contents/Resources/markitdown`).
