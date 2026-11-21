@@ -1,17 +1,21 @@
 import Foundation
 import os
-import PageCaptureOCRKit
 
 public enum DocumentConversionError: Error, Equatable {
-    /// The bundled Python is not where it should be (e.g. running from `swift run` without a built app).
+    /// The bundled Python, or the `pagecapture-ocr` helper a scanned PDF needs, is not where it
+    /// should be (e.g. running from `swift run` without a built app).
     case runtimeMissing(URL)
     /// The conversion took longer than the converter's timeout and was stopped.
     case timedOut
-    /// MarkItDown failed. `message` is the end of what it wrote to stderr (about 2 KB), e.g. a
-    /// traceback ending in `UnsupportedFormatException` or `FileConversionException`.
+    /// MarkItDown or the OCR helper failed. `message` is the end of what it wrote to stderr (about
+    /// 2 KB), e.g. a traceback ending in `UnsupportedFormatException` or `FileConversionException`.
     case failed(status: Int32, message: String)
     /// The Markdown was longer than the converter's `maxOutputBytes`; the conversion was stopped.
     case outputTooLarge
+    /// A PDF without text that OCR could not open: damaged, not a PDF, locked, or without pages.
+    case unreadable
+    /// A PDF without text on which OCR found no text either.
+    case noTextFound
 }
 
 /// Converts one local file (PDF, DOCX, PPTX, XLSX, HTML, …) to Markdown with the bundled MarkItDown.
@@ -19,23 +23,30 @@ public enum DocumentConversionError: Error, Equatable {
 /// The file is untrusted (downloaded from the web), so it never reaches MarkItDown in place: it is
 /// copied into a private work directory under a fixed name, and Python runs in a sandbox that
 /// allows little more than reading the runtime and the system libraries and writing in that
-/// directory (`sandboxProfile`), with a minimal environment of its own. The work directory is
+/// directory (`sandboxProfile`), with a minimal environment of its own. A PDF without text (a
+/// scan) then goes to the bundled `pagecapture-ocr` helper, in a sandbox of its own
+/// (`ocrSandboxProfile`): the app's own process never decodes the file. The work directory is
 /// deleted afterwards, whatever happened.
 public struct DocumentConverter: Sendable {
     /// `markitdown/bin/python3` of the bundled runtime.
     public var pythonURL: URL
-    /// How long one conversion may take before it is stopped.
+    /// How long one MarkItDown run may take before it is stopped.
     public var timeout: Duration
-    /// The longest Markdown accepted, in bytes.
+    /// The longest Markdown accepted, in bytes, from MarkItDown and from the OCR helper.
     public var maxOutputBytes: Int
-    /// Called with the copy of a `.pdf` whose conversion succeeded but produced no text (a scanned
-    /// PDF); what it returns is the result instead. The copy is deleted once it returns.
+    /// The `pagecapture-ocr` helper that reads scanned PDFs.
+    public var ocrHelperURL: URL
+    /// How long the OCR helper may take before it is stopped; a budget of its own, on top of `timeout`.
+    public var ocrTimeout: Duration
+    /// For tests: called with the copy of a `.pdf` whose conversion succeeded but produced no text,
+    /// instead of running `ocrHelperURL`; what it returns is the result. The copy is deleted once
+    /// it returns.
     public var pdfFallback: (@Sendable (URL) async throws -> String)?
 
     /// Where the work directories are made. Tests use one with spaces and quotes in its path.
     var temporaryRoot = FileManager.default.temporaryDirectory
-    /// Called once the sandboxed process is running, with its pid (also its process group) and
-    /// its work directory. For tests.
+    /// Called once each sandboxed process is running (Python, then the OCR helper if it runs),
+    /// with its pid (also its process group) and its work directory. For tests.
     var onLaunch: (@Sendable (pid_t, URL) -> Void)?
     /// The sandbox profile Python runs under. Tests use a looser one to check what happens when
     /// Python can start processes, which `sandboxProfile` denies.
@@ -45,17 +56,16 @@ public struct DocumentConverter: Sendable {
         pythonURL: URL = DocumentConverter.bundledPythonURL,
         timeout: Duration = .seconds(120),
         maxOutputBytes: Int = 50 << 20,
-        pdfFallback: (@Sendable (URL) async throws -> String)? = DocumentConverter.recognizeScannedPDF
+        ocrHelperURL: URL = DocumentConverter.bundledOCRHelperURL,
+        ocrTimeout: Duration = .seconds(300),
+        pdfFallback: (@Sendable (URL) async throws -> String)? = nil
     ) {
         self.pythonURL = pythonURL
         self.timeout = timeout
         self.maxOutputBytes = maxOutputBytes
+        self.ocrHelperURL = ocrHelperURL
+        self.ocrTimeout = ocrTimeout
         self.pdfFallback = pdfFallback
-    }
-
-    /// The default `pdfFallback`: on-device Vision OCR of the PDF's pages (`PDFTextRecognizer`).
-    public static let recognizeScannedPDF: @Sendable (URL) async throws -> String = { url in
-        try await PDFTextRecognizer.markdown(fromPDF: url)
     }
 
     /// `markitdown/bin/python3` in `Contents/Helpers` of the app (a link to `Contents/Resources/markitdown`).
@@ -63,27 +73,87 @@ public struct DocumentConverter: Sendable {
         Tools.bundledHelpersDirectory.appendingPathComponent("markitdown/bin/python3")
     }
 
+    /// `pagecapture-ocr` in `Contents/Helpers` of the app.
+    public static var bundledOCRHelperURL: URL {
+        Tools.bundledHelpersDirectory.appendingPathComponent("pagecapture-ocr")
+    }
+
     /// The Markdown for the file at `url`.
     public func markdown(forFile url: URL) async throws -> String {
-        try checkRuntime()
+        try Self.checkExecutable(pythonURL)
         return try await withWorkDirectory { directory in
             let fileExtension = Self.sanitisedExtension(url.pathExtension)
             let copy = directory.appendingPathComponent(fileExtension.isEmpty ? "input" : "input.\(fileExtension)")
             try FileManager.default.copyItem(at: url.resolvingSymlinksInPath(), to: copy)
-            let markdown = try await runSandboxed(Self.convertScript, arguments: [copy.path], in: directory)
-            if fileExtension == "pdf", let pdfFallback, markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return try await pdfFallback(copy)
+            let result = try await runSandboxed(pythonRun(Self.convertScript, arguments: [copy.path]), in: directory)
+            guard result.status == 0 else { throw result.failure }
+            let markdown = String(decoding: result.output, as: UTF8.self)
+            guard fileExtension == "pdf", markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return markdown
             }
-            return markdown
+            if let pdfFallback { return try await pdfFallback(copy) }
+            return try await recognise(copy, in: directory)
         }
     }
 
     /// Runs a Python snippet exactly the way `markdown(forFile:)` runs MarkItDown, in a work
     /// directory of its own, and returns its stdout. For tests of the sandbox and the timeout.
     func runScript(_ script: String, arguments: [String] = []) async throws -> String {
-        try checkRuntime()
-        return try await withWorkDirectory { try await runSandboxed(script, arguments: arguments, in: $0) }
+        try Self.checkExecutable(pythonURL)
+        return try await withWorkDirectory { directory in
+            let result = try await runSandboxed(pythonRun(script, arguments: arguments), in: directory)
+            guard result.status == 0 else { throw result.failure }
+            return String(decoding: result.output, as: UTF8.self)
+        }
     }
+
+    /// Runs the OCR helper with `arguments` exactly the way `markdown(forFile:)` runs it on a scan,
+    /// in a work directory of its own, and returns its exit status and stdout. For tests of the
+    /// helper's sandbox (with its debug build's `--probe-…` arguments) and timeout.
+    func runOCRHelper(arguments: [String]) async throws -> (status: Int32, output: String) {
+        try Self.checkExecutable(ocrHelperURL)
+        return try await withWorkDirectory { directory in
+            let result = try await runSandboxed(ocrRun(arguments: arguments), in: directory)
+            return (result.status, String(decoding: result.output, as: UTF8.self))
+        }
+    }
+
+    // MARK: - OCR
+
+    /// The Markdown the OCR helper reads from `copy`, a PDF in the work directory `directory`.
+    /// The helper's exit statuses are listed in `Sources/PageCaptureOCR/main.swift`.
+    private func recognise(_ copy: URL, in directory: URL) async throws -> String {
+        try Self.checkExecutable(ocrHelperURL)
+        let result = try await runSandboxed(ocrRun(arguments: [copy.path]), in: directory)
+        switch (result.exited, result.status) {
+        case (true, 0): return String(decoding: result.output, as: UTF8.self)
+        case (true, 3): throw DocumentConversionError.unreadable
+        case (true, 4): throw DocumentConversionError.noTextFound
+        default: throw result.failure
+        }
+    }
+
+    /// Denies everything but what OCR of a PDF in the work directory needs: running the helper
+    /// (`HELPER`, its real path) and reading it, its directory itself (`HELPER_DIR`: without it
+    /// the helper has no main bundle and CoreImage crashes reading its defaults), the work
+    /// directory (`WORK_DIR`), `/`, the system libraries and ICU's data (text recognition
+    /// collates with it); writing in the work directory and to /dev/null; reading sysctls; and
+    /// opening IOSurfaces (Vision always draws into IOSurface-backed buffers). The GPU and the
+    /// Neural Engine stay denied, so OCR runs on the CPU. As for Python, there is no network, no
+    /// child process, no Mach service and no file of the user's, and the paths come in as
+    /// parameters.
+    static let ocrSandboxProfile = """
+        (version 1)
+        (deny default)
+        (allow process-exec (literal (param "HELPER")))
+        (allow file-read*
+            (literal "/") (subpath "/System") (subpath "/usr/lib") (literal "/dev/null")
+            (literal (param "HELPER")) (literal (param "HELPER_DIR")) (subpath (param "WORK_DIR")))
+        (allow file-write* (subpath (param "WORK_DIR")) (literal "/dev/null"))
+        (allow sysctl-read)
+        (allow iokit-open-user-client (iokit-user-client-class "IOSurfaceRootUserClient"))
+        (allow file-read* (subpath "/usr/share/icu"))
+        """
 
     // MARK: - Sandboxed run
 
@@ -116,15 +186,68 @@ public struct DocumentConverter: Sendable {
         (allow sysctl-read)
         """
 
+    /// One program to run under `sandbox-exec`: what `runSandboxed` needs besides the work directory.
+    private struct SandboxedProgram {
+        /// The real path: `sandbox-exec` executes it, and the profile allows it by that path.
+        var executable: URL
+        var arguments: [String]
+        var profile: String
+        /// The profile's parameters (`-D NAME=value`) besides `WORK_DIR`, which is always set.
+        var parameters: KeyValuePairs<String, String>
+        /// The whole environment, besides `HOME` and `TMPDIR` (the work directory) and `PATH` and `LANG`.
+        var environment: [String: String] = [:]
+        var timeout: Duration
+    }
+
+    /// What a sandboxed program that ran to its end (not stopped) did.
+    private struct SandboxedResult {
+        /// The exit status, or the signal that ended it if `exited` is false.
+        var status: Int32
+        var exited: Bool
+        var output: Data
+        var errors: Data
+
+        /// `failed(status:message:)` with the end of stderr.
+        var failure: DocumentConversionError {
+            let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failed(status: status, message: message.isEmpty ? "Exited with status \(status)" : message)
+        }
+    }
+
+    /// `python3 -I -B -c script arguments…` under `profile`.
+    private func pythonRun(_ script: String, arguments: [String]) -> SandboxedProgram {
+        // The real path: the sandbox matches it, and the app's `Helpers/markitdown` is a link.
+        let python = Self.realPath(pythonURL, isDirectory: false)
+        let runtime = python.deletingLastPathComponent().deletingLastPathComponent()
+        return SandboxedProgram(
+            executable: python,
+            arguments: ["-I", "-B", "-c", script] + arguments,
+            profile: profile,
+            parameters: ["RUNTIME": runtime.path, "PYTHON": python.path],
+            environment: ["PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"],
+            timeout: timeout)
+    }
+
+    /// `pagecapture-ocr arguments…` under `ocrSandboxProfile`.
+    private func ocrRun(arguments: [String]) -> SandboxedProgram {
+        let helper = Self.realPath(ocrHelperURL, isDirectory: false)
+        return SandboxedProgram(
+            executable: helper,
+            arguments: arguments,
+            profile: Self.ocrSandboxProfile,
+            parameters: ["HELPER": helper.path, "HELPER_DIR": helper.deletingLastPathComponent().path],
+            timeout: ocrTimeout)
+    }
+
     /// How much of the end of stderr goes into `failed(status:message:)`.
     private static let stderrTail = 2048
-    /// How long the output is still read once Python has exited and its process group is killed.
-    /// Only a process that left the group can hold the pipes open that long.
+    /// How long the output is still read once the program has exited and its process group is
+    /// killed. Only a process that left the group can hold the pipes open that long.
     private static let drainTime: Duration = .seconds(1)
 
-    private func checkRuntime() throws {
-        guard FileManager.default.isExecutableFile(atPath: pythonURL.path) else {
-            throw DocumentConversionError.runtimeMissing(pythonURL)
+    private static func checkExecutable(_ url: URL) throws {
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            throw DocumentConversionError.runtimeMissing(url)
         }
     }
 
@@ -138,27 +261,23 @@ public struct DocumentConverter: Sendable {
         return try await body(Self.realPath(directory, isDirectory: true))
     }
 
-    /// Runs `python3 -I -B -c script arguments…` under `sandbox-exec` in `directory` and returns
-    /// its stdout. Stops it (its whole process group) on timeout, when stdout passes
-    /// `maxOutputBytes`, or when the calling task is cancelled. Once Python has exited, kills what
-    /// is left in its group and reads the output for at most `drainTime` more, so it always returns.
-    private func runSandboxed(_ script: String, arguments: [String], in directory: URL) async throws -> String {
-        // The real path: the sandbox matches it, and the app's `Helpers/markitdown` is a link.
-        let python = Self.realPath(pythonURL, isDirectory: false)
-        let runtime = python.deletingLastPathComponent().deletingLastPathComponent()
+    /// Runs `program` under `sandbox-exec` in `directory` and returns what it did. Stops it (its
+    /// whole process group) on its timeout, when stdout passes `maxOutputBytes`, or when the
+    /// calling task is cancelled, and throws `timedOut`, `outputTooLarge` or `CancellationError`.
+    /// Once the program has exited, kills what is left in its group and reads the output for at
+    /// most `drainTime` more, so it always returns.
+    private func runSandboxed(_ program: SandboxedProgram, in directory: URL) async throws -> SandboxedResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-        process.arguments = ["-D", "WORK_DIR=\(directory.path)", "-D", "RUNTIME=\(runtime.path)",
-                             "-D", "PYTHON=\(python.path)", "-p", profile,
-                             python.path, "-I", "-B", "-c", script] + arguments
-        process.environment = [
+        process.arguments = ["-D", "WORK_DIR=\(directory.path)"]
+            + program.parameters.flatMap { ["-D", "\($0.key)=\($0.value)"] }
+            + ["-p", program.profile, program.executable.path] + program.arguments
+        process.environment = program.environment.merging([
             "PATH": "/usr/bin:/bin",
             "HOME": directory.path,
             "TMPDIR": directory.path,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONIOENCODING": "utf-8",
             "LANG": "en_US.UTF-8",
-        ]
+        ]) { _, fixed in fixed }
         process.currentDirectoryURL = directory
         let stdout = Pipe(), stderr = Pipe()
         process.standardInput = FileHandle.nullDevice
@@ -166,14 +285,17 @@ public struct DocumentConverter: Sendable {
         process.standardError = stderr
         let exit = ExitStatus()
         let running = RunningProcess()
-        process.terminationHandler = {
+        let exitedNormally = OSAllocatedUnfairLock(initialState: false)
+        process.terminationHandler = { process in
             running.reaped()
-            exit.exited($0.terminationStatus)
+            let exited = process.terminationReason == .exit
+            exitedNormally.withLock { $0 = exited }
+            exit.exited(process.terminationStatus)
         }
         let timedOut = OSAllocatedUnfairLock(initialState: false)
         let tooLarge = OSAllocatedUnfairLock(initialState: false)
         let readingStopped = OSAllocatedUnfairLock(initialState: false)
-        let (timeout, maxOutputBytes, onLaunch) = (timeout, maxOutputBytes, onLaunch)
+        let (timeout, maxOutputBytes, onLaunch) = (program.timeout, maxOutputBytes, onLaunch)
 
         let (status, output, errors) = try await withTaskCancellationHandler {
             try process.run()
@@ -196,8 +318,8 @@ public struct DocumentConverter: Sendable {
             async let err = Self.read(stderr.fileHandleForReading, limit: Self.stderrTail, keepingEnd: true,
                                       until: readingStopped)
             let status = await exit.wait()
-            // Nothing Python started may outlive it, and only what left its group can still hold
-            // the pipes open: read them for `drainTime` at most.
+            // Nothing the program started may outlive it, and only what left its group can still
+            // hold the pipes open: read them for `drainTime` at most.
             running.killGroup()
             let drain = Task {
                 try await Task.sleep(for: Self.drainTime)
@@ -212,11 +334,7 @@ public struct DocumentConverter: Sendable {
         if timedOut.withLock({ $0 }) { throw DocumentConversionError.timedOut }
         if tooLarge.withLock({ $0 }) { throw DocumentConversionError.outputTooLarge }
         try Task.checkCancellation()
-        guard status == 0 else {
-            let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw DocumentConversionError.failed(status: status, message: message.isEmpty ? "Exited with status \(status)" : message)
-        }
-        return String(decoding: output, as: UTF8.self)
+        return SandboxedResult(status: status, exited: exitedNormally.withLock { $0 }, output: output, errors: errors)
     }
 
     /// Reads `handle` to its end, or until `stopped` is set, on a background thread, keeping at

@@ -11,8 +11,6 @@ let package = Package(
     targets: [
         .target(
             name: "PageCaptureCore",
-            // Interim: the in-process OCR fallback, until DocumentConverter runs pagecapture-ocr.
-            dependencies: ["PageCaptureOCRKit"],
             resources: [
                 .copy("Resources/merge.js"), .copy("Resources/capture.js"),
                 .copy("Resources/markdown.js"), .copy("Resources/document.js"),

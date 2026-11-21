@@ -10,7 +10,7 @@ final class DocumentConverterTests: XCTestCase {
     private static let runtime = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("build/tools/markitdown", isDirectory: true)
-    private static let python = runtime.appendingPathComponent("bin/python3")
+    static let python = runtime.appendingPathComponent("bin/python3")
 
     private var folder: URL!
     private var documents: URL!
@@ -364,15 +364,6 @@ final class DocumentConverterTests: XCTestCase {
         XCTAssertEqual(made.map(\.existed), [true])
     }
 
-    func testScannedPDFIsReadByOCRByDefault() async throws {
-        let scan = folder.appendingPathComponent("scan.pdf")
-        try Self.writeScannedPDF(line: "PageCapture reads scanned pages", to: scan)
-
-        let markdown = try await DocumentConverter(pythonURL: Self.python).markdown(forFile: scan)
-
-        XCTAssertTrue(markdown.lowercased().contains("pagecapture reads scanned pages"), markdown)
-    }
-
     func testPDFWithTextDoesNotUseTheFallback() async throws {
         let called = OSAllocatedUnfairLock(initialState: false)
         converter.pdfFallback = { _ in
@@ -426,7 +417,7 @@ final class DocumentConverterTests: XCTestCase {
         """
     }
 
-    private static func waitForLaunch(_ launch: OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>) async throws -> (pid_t, URL) {
+    static func waitForLaunch(_ launch: OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>) async throws -> (pid_t, URL) {
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
             if let launched = launch.withLock({ $0 }) {
@@ -447,7 +438,7 @@ final class DocumentConverterTests: XCTestCase {
     }
 
     /// Waits up to 3 s for everything in process group `group` to be gone.
-    private static func assertGroupGone(_ group: pid_t, file: StaticString = #filePath, line: UInt = #line) async throws {
+    static func assertGroupGone(_ group: pid_t, file: StaticString = #filePath, line: UInt = #line) async throws {
         let deadline = ContinuousClock.now + .seconds(3)
         while ContinuousClock.now < deadline, killpg(group, 0) == 0 { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNotEqual(killpg(group, 0), 0, "Something in process group \(group) is still running", file: file, line: line)
@@ -466,7 +457,7 @@ final class DocumentConverterTests: XCTestCase {
     }
 
     /// A one-page PDF whose only content is a picture of `line` in black on white: a scan.
-    private static func writeScannedPDF(line: String, to url: URL) throws {
+    static func writeScannedPDF(line: String, to url: URL) throws {
         let size = CGSize(width: 612, height: 792), scale: CGFloat = 4
         let bitmap = try XCTUnwrap(CGContext(
             data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
