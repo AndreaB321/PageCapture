@@ -24,9 +24,36 @@ V8_COMMIT=ac1e23989121713ca642f6650b34deff7b686896
 V8_LICENSE_SHA256=6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509
 ICU_COMMIT=ee5f27adc28bd3f15b2c293f726d14d2e336cbd5
 ICU_LICENSE_SHA256=451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca
+# MarkItDown runs on CPython from python-build-standalone (astral-sh); its Python packages are
+# pinned, wheel by wheel, in scripts/markitdown-requirements.txt.
+MARKITDOWN_VERSION=0.1.9
+PBS_RELEASE=20261110
+PBS_PYTHON_VERSION=3.13.18
+# cpython-<v>+<release>-aarch64-apple-darwin-install_only_stripped.tar.gz, the runtime.
+PBS_SHA256=7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540
+# The same build's pgo+lto-full.tar.zst, only for its licenses/ (the components' licence texts).
+PBS_FULL_SHA256=11c316dfa24e1184e91de3c1434ed1d3e986c30b2d7a0273257067efe611a677
+# Licence texts the wheels leave out, from each project's repository at the release tag
+# (python-cobble has no licence file: its README states BSD-2-Clause).
+MARKITDOWN_LICENSE_SHA256=c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+MAGIKA_VERSION=1.0.3
+MAGIKA_LICENSE_SHA256=58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd
+FLATBUFFERS_VERSION=25.12.19
+FLATBUFFERS_LICENSE_SHA256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+COBBLE_VERSION=0.1.4
+COBBLE_README_SHA256=d6d46202db973b560d2f521dced9110b3e0a46d9a75e1428dade8b7608dd0cca
+# lxml's wheel links GNU libiconv (LGPL-2.1) statically: its source and lxml's (with the build
+# scripts) go into the sources bundle. fetch-tools.sh checks both versions against the install.
+LXML_VERSION=6.1.3
+LXML_SRC_SHA256=45222d94ddd511536f3b2f7d9deae3b2339b4ce0f075f1ca25703b07cad9dd21
+LIBICONV_VERSION=1.18
+LIBICONV_SHA256=3b08f5f4f9b4eb82f151a7040bfd6fe6c6fb922efe4b1659c66ea933276965e8
+LGPL21_SHA256=20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95
 
 CACHE=build/tools-cache
 YTDLP_RELEASE="https://github.com/yt-dlp/yt-dlp/releases/download/$YTDLP_VERSION"
+PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$PBS_RELEASE"
+PBS_NAME="cpython-$PBS_PYTHON_VERSION+$PBS_RELEASE-aarch64-apple-darwin"
 
 # fetch URL DEST SHA256: downloads unless DEST already has the expected hash.
 fetch() {
@@ -68,6 +95,16 @@ check_ytdlp_published() {
     curl -fsSL --retry 3 -o "$CACHE/yt-dlp-SHA2-256SUMS" "$YTDLP_RELEASE/SHA2-256SUMS"
     if ! grep -qx "$sha  $name" "$CACHE/yt-dlp-SHA2-256SUMS"; then
         echo "yt-dlp $YTDLP_VERSION SHA2-256SUMS does not list the pinned $name hash" >&2
+        exit 1
+    fi
+}
+
+# Likewise for python-build-standalone's SHA256SUMS.
+check_pbs_published() {
+    local sha=$1 name=$2
+    curl -fsSL --retry 3 -o "$CACHE/pbs-$PBS_RELEASE-SHA256SUMS" "$PBS_URL/SHA256SUMS"
+    if ! grep -qxF "$sha  $name" "$CACHE/pbs-$PBS_RELEASE-SHA256SUMS"; then
+        echo "python-build-standalone $PBS_RELEASE SHA256SUMS does not list the pinned $name hash" >&2
         exit 1
     fi
 }

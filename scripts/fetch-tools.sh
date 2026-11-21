@@ -4,10 +4,18 @@
 #                                 remux plus poster-frame extraction only, no network protocols
 #   build/tools/yt-dlp            the official yt-dlp_macos release binary
 #   build/tools/deno              the official deno-aarch64-apple-darwin release binary
+#   build/tools/markitdown/       CPython (python-build-standalone) with MarkItDown and its
+#                                 packages, for documents to Markdown; bin/python3 -m markitdown
 # and their licence texts in build/notices/. Pins and the download helper are in tool-pins.sh.
 # Every download is pinned and checked against its SHA-256. Finished steps are skipped on reruns.
+# `scripts/fetch-tools.sh markitdown` produces only the MarkItDown runtime (what CI uses).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+case "${1:-all}" in
+    all | markitdown) ONLY="${1:-all}" ;;
+    *) echo "usage: $0 [markitdown]" >&2; exit 2 ;;
+esac
 
 . scripts/tool-pins.sh
 
@@ -16,6 +24,157 @@ NOTICES=build/notices
 # The exact FFmpeg build recipe, for the corresponding-source bundle (make-source-bundle.sh).
 FFMPEG_BUILD_TXT="$CACHE/ffmpeg-build.txt"
 mkdir -p "$CACHE" "$TOOLS" "$NOTICES"
+
+# --- MarkItDown ------------------------------------------------------------------------------
+# Converts PDF, Word, PowerPoint, Excel, Outlook .msg and HTML files to Markdown, run as a child
+# process. Only the extras pdf, docx, pptx, xlsx, xls and outlook are installed: no audio, YouTube
+# or Azure ones. Every wheel is pinned by hash in markitdown-requirements.txt; no sdists.
+MD_REQS=scripts/markitdown-requirements.txt
+MD_PY="${PBS_PYTHON_VERSION%.*}" # 3.13
+MD_STAMP="$CACHE/markitdown.stamp"
+MD_WANT="$PBS_NAME $PBS_SHA256 $(shasum -a 256 "$MD_REQS" | cut -d' ' -f1)"
+MD_PY_NOTICE="$NOTICES/MarkItDown-Python-$PBS_PYTHON_VERSION.txt"
+
+if [[ -x "$TOOLS/markitdown/bin/python3" && -f "$MD_STAMP" && -f "$MD_PY_NOTICE" ]] \
+    && [[ "$(cat "$MD_STAMP")" == "$MD_WANT" ]]; then
+    echo "markitdown $MARKITDOWN_VERSION (Python $PBS_PYTHON_VERSION): up to date"
+else
+    for pin in "markitdown==$MARKITDOWN_VERSION" "lxml==$LXML_VERSION" "magika==$MAGIKA_VERSION" \
+        "flatbuffers==$FLATBUFFERS_VERSION" "cobble==$COBBLE_VERSION"; do
+        grep -qxF "$pin \\" "$MD_REQS" || { echo "$MD_REQS has no $pin (tool-pins.sh)" >&2; exit 1; }
+    done
+    command -v zstd >/dev/null || { echo "zstd is needed to unpack Python's licences (brew install zstd)" >&2; exit 1; }
+    PY_TGZ="$PBS_NAME-install_only_stripped.tar.gz"
+    PY_FULL="$PBS_NAME-pgo+lto-full.tar.zst"
+    check_pbs_published "$PBS_SHA256" "$PY_TGZ"
+    check_pbs_published "$PBS_FULL_SHA256" "$PY_FULL"
+    fetch "$PBS_URL/${PY_TGZ//+/%2B}" "$CACHE/$PY_TGZ" "$PBS_SHA256"
+    fetch "$PBS_URL/${PY_FULL//+/%2B}" "$CACHE/$PY_FULL" "$PBS_FULL_SHA256"
+
+    WORK="$CACHE/markitdown-work"
+    rm -rf "$WORK" "$TOOLS/markitdown"
+    mkdir -p "$WORK/full"
+    tar -xzf "$CACHE/$PY_TGZ" -C "$WORK"
+    zstd -dcq "$CACHE/$PY_FULL" | tar -xf - -C "$WORK/full" python/licenses
+    P="$WORK/python"
+    LIB="$P/lib/python$MD_PY"
+    SITE="$LIB/site-packages"
+
+    echo "Installing markitdown $MARKITDOWN_VERSION into Python $PBS_PYTHON_VERSION"
+    # The wheels for macOS 14 arm64 (the app's minimum), kept in the cache; pip checks each hash
+    # while downloading and again while installing.
+    PIP=("$P/bin/python3" -I -m pip --disable-pip-version-check --no-cache-dir --quiet)
+    "${PIP[@]}" download --require-hashes --no-deps --only-binary=:all: \
+        --platform macosx_14_0_arm64 --python-version "$MD_PY" --implementation cp \
+        --abi "cp${MD_PY/./}" -d "$CACHE/markitdown-wheels" -r "$MD_REQS"
+    "${PIP[@]}" install --require-hashes --no-deps --only-binary=:all: --no-compile \
+        --no-index --find-links "$CACHE/markitdown-wheels" -r "$MD_REQS"
+
+    # lxml's wheel links GNU libiconv statically; the sources bundle carries LIBICONV_VERSION.
+    ICONV="$("$P/bin/python3" -I -c 'import ctypes, lxml.etree as e
+v = ctypes.c_int.in_dll(ctypes.CDLL(e.__file__), "_libiconv_version").value
+print(f"{v >> 8}.{v & 0xff}")')"
+    [[ "$ICONV" == "$LIBICONV_VERSION" ]] \
+        || { echo "lxml links libiconv $ICONV, tool-pins.sh says $LIBICONV_VERSION" >&2; exit 1; }
+
+    # One notice per bundled distribution. Python: CPython and the libraries built into it (the
+    # interpreter uses macOS's own zlib, libedit and ncurses).
+    rm -f "$NOTICES"/MarkItDown-*
+    {
+        echo "Python $PBS_PYTHON_VERSION, python-build-standalone $PBS_RELEASE ($PY_TGZ)"
+        echo "in PageCapture.app/Contents/Helpers/markitdown, and the libraries built into it."
+        for lic in cpython bzip2 expat libffi liblzma mpdecimal openssl-3 sqlite libuuid; do
+            printf '\n===== %s =====\n\n' "LICENSE.$lic.txt"
+            cat "$WORK/full/python/licenses/LICENSE.$lic.txt"
+        done
+    } >"$MD_PY_NOTICE"
+    # Each wheel: the licence files in its .dist-info (with those of the libraries it bundles).
+    for dist in "$SITE"/*.dist-info; do
+        name="$(basename "$dist" .dist-info)"
+        [[ "$name" == pip-* ]] && continue
+        files="$(find "$dist" -type f \( -path '*/licenses/*' -o -iname 'LICEN[CS]E*' \
+            -o -iname 'COPYING*' -o -iname 'NOTICE*' -o -iname 'AUTHORS*' \) | sort)"
+        [[ -n "$files" ]] || continue
+        while read -r f; do
+            printf '===== %s =====\n\n' "${f#"$dist"/}"
+            cat "$f"
+            echo
+        done <<<"$files" >"$NOTICES/MarkItDown-$name.txt"
+    done
+    # onnxruntime keeps its licence and third-party notices in the package.
+    for f in LICENSE ThirdPartyNotices.txt; do
+        printf '===== onnxruntime/%s =====\n\n' "$f"
+        cat "$SITE/onnxruntime/$f"
+        echo
+    done >>"$NOTICES/MarkItDown-onnxruntime-$(sed -n 's/^onnxruntime==\([^ ]*\) .*/\1/p' "$MD_REQS").txt"
+    # Wheels without a licence file: the text from the project's repository at the release tag.
+    fetch "https://raw.githubusercontent.com/microsoft/markitdown/v$MARKITDOWN_VERSION/LICENSE" \
+        "$NOTICES/MarkItDown-markitdown-$MARKITDOWN_VERSION.txt" "$MARKITDOWN_LICENSE_SHA256"
+    fetch "https://raw.githubusercontent.com/google/magika/python-v$MAGIKA_VERSION/LICENSE" \
+        "$NOTICES/MarkItDown-magika-$MAGIKA_VERSION.txt" "$MAGIKA_LICENSE_SHA256"
+    fetch "https://raw.githubusercontent.com/google/flatbuffers/v$FLATBUFFERS_VERSION/LICENSE" \
+        "$NOTICES/MarkItDown-flatbuffers-$FLATBUFFERS_VERSION.txt" "$FLATBUFFERS_LICENSE_SHA256"
+    fetch "https://raw.githubusercontent.com/mwilliamson/python-cobble/$COBBLE_VERSION/README.rst" \
+        "$NOTICES/MarkItDown-cobble-$COBBLE_VERSION.txt" "$COBBLE_README_SHA256"
+    for dist in "$SITE"/*.dist-info; do
+        name="$(basename "$dist" .dist-info)"
+        [[ "$name" == pip-* || -s "$NOTICES/MarkItDown-$name.txt" ]] \
+            || { echo "No licence text for $name: add one to fetch-tools.sh" >&2; exit 1; }
+    done
+
+    # Leave out what converting documents never uses: pip, IDLE, Tk, test suites. bin/ keeps only
+    # the interpreter: the packages' entry-point scripts hard-code this build directory.
+    rm -rf "$SITE"/pip "$SITE"/pip-*.dist-info "$LIB"/ensurepip "$LIB"/idlelib "$LIB"/tkinter \
+        "$LIB"/turtledemo "$LIB"/turtle.py "$LIB"/lib-dynload/_tkinter.* \
+        "$P"/lib/libtcl* "$P"/lib/tcl9* "$P"/lib/tk9* "$P"/lib/itcl* "$P"/lib/thread*
+    find "$SITE" -type d -name tests -prune -exec rm -rf {} +
+    find "$P/bin" -mindepth 1 ! -name python ! -name python3 ! -name "python$MD_PY" -delete
+    # Bytecode for every module, checked by hash never: Python then never writes __pycache__ into
+    # the signed app, and starts in a third of the time. olefile2.py is Python 2 code that
+    # olefile never imports.
+    find "$P" -type d -name __pycache__ -prune -exec rm -rf {} +
+    "$P/bin/python3" -I -m compileall -q -f -j0 --invalidation-mode unchecked-hash \
+        -x 'olefile/olefile2\.py$' "$LIB" >/dev/null
+
+    "$P/bin/python3" -I -c '
+import importlib.util as u
+import markitdown, pdfminer, pdfplumber, mammoth, pptx, openpyxl, xlrd, olefile, magika
+markitdown.MarkItDown()
+extra = [m for m in ["pydub", "speech_recognition", "youtube_transcript_api", "azure"] if u.find_spec(m)]
+assert not extra, f"excluded packages installed: {extra}"'
+    mv "$P" "$TOOLS/markitdown"
+    rm -rf "$WORK"
+    echo "$MD_WANT" >"$MD_STAMP"
+fi
+# GNU libiconv, inside lxml.
+fetch "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt" "$NOTICES/LGPL-2.1.txt" "$LGPL21_SHA256"
+
+cat >"$NOTICES/MarkItDown.txt" <<EOF
+MarkItDown $MARKITDOWN_VERSION and the Python it runs on
+
+PageCapture.app/Contents/Helpers/markitdown is CPython $PBS_PYTHON_VERSION from
+python-build-standalone release $PBS_RELEASE (https://github.com/astral-sh/python-build-standalone),
+file $PBS_NAME-install_only_stripped.tar.gz (SHA-256 $PBS_SHA256),
+with Microsoft MarkItDown $MARKITDOWN_VERSION (MIT, https://github.com/microsoft/markitdown) and the
+Python packages it needs installed from the official PyPI wheels, unmodified. The list of wheels
+and their SHA-256s is scripts/markitdown-requirements.txt in the PageCapture repository.
+pip, IDLE, Tk and the packages' test suites are left out, and every module is precompiled.
+
+Each component's licence is in MarkItDown-<component>-<version>.txt next to this file
+(MarkItDown-Python-$PBS_PYTHON_VERSION.txt for Python and the libraries built into it).
+
+The lxml wheel (lxml/etree and lxml/objectify) contains GNU libiconv $LIBICONV_VERSION, linked
+statically, under the GNU Lesser General Public License version 2.1 (LGPL-2.1.txt). The
+PageCapture sources bundle has libiconv-$LIBICONV_VERSION.tar.gz and lxml-$LXML_VERSION.tar.gz, whose
+buildlibxml.py builds lxml against a given libiconv. To use a modified libiconv, build lxml with
+it and replace Contents/Helpers/markitdown/lib/python$MD_PY/site-packages/lxml, then re-sign the
+app (codesign --force -s - for each changed file, then for PageCapture.app).
+EOF
+
+if [[ "$ONLY" == markitdown ]]; then
+    echo "MarkItDown ready in $TOOLS/markitdown"
+    exit 0
+fi
 
 # --- FFmpeg ----------------------------------------------------------------------------------
 # Only what PageCapture needs: joining local HLS (.ts or fMP4 segments, clear-key AES-128 through
