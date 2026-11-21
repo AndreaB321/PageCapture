@@ -19,7 +19,8 @@
 
 <!-- Filled panels: text; only a form field; only a web component (its text in a shadow root); only
      an element styled by CSS; an empty panel in a wrapper the page does not show; a spinner faded
-     out; a busy flag set before the tab was selected and never cleared. -->
+     out, which comes with the panel's content on the click (so it is not one the panel showed
+     before the click); a busy flag set before the tab was selected and never cleared. -->
 <section data-case="filled">
   <h2>Filled tabs</h2>
   <div role="tablist">
@@ -38,7 +39,7 @@
   <div id="f3" role="tabpanel" hidden><pc-card></pc-card></div>
   <div id="f4" role="tabpanel" hidden><div class="badge"></div></div>
   <div style="display: none"><div id="f5" role="tabpanel" hidden></div></div>
-  <div id="f6" role="tabpanel" hidden><p>Faded spinner text.</p><div class="spinner" style="opacity: 0">…</div></div>
+  <div id="f6" role="tabpanel" hidden data-fill='<p>Faded spinner text.</p><div class="spinner" style="opacity: 0">…</div>'></div>
   <div id="f7" role="tabpanel" aria-busy="true" hidden><p>Stale busy text.</p></div>
 </section>
 

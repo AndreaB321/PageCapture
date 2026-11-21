@@ -11,7 +11,8 @@
 <h1>Stuck panels</h1>
 
 <!-- Tab panels whose content never arrives: once its tab is selected, each shows a busy spinner for
-     good. In "#stuck" the spinner never changes; in "#churning" its text changes all the time.
+     good. In "#stuck" the spinner never changes; in "#churning" (four tabs) and "#churning-long"
+     (five tabs) its text changes all the time.
      Tabs are made by the script below; the URL's fragment picks the case. -->
 <div role="tablist" id="list">
   <button role="tab" aria-controls="s0" aria-selected="true">Stuck Ready</button>
@@ -24,8 +25,8 @@
 <script>
   // When each tab was clicked (read by the tests).
   const clickTimes = [];
-  const churning = location.hash === '#churning';
-  const count = churning ? 4 : 7;
+  const churning = location.hash.startsWith('#churning');
+  const count = location.hash === '#churning-long' ? 5 : churning ? 4 : 7;
   const list = document.getElementById('list');
   const panels = document.getElementById('panels');
   for (let i = 1; i <= count; i++) {

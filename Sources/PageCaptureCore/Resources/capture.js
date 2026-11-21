@@ -575,11 +575,13 @@
   // shows a loading indicator, or its content grew less than PANEL_QUIET ms ago. What the page does
   // in the click itself (synchronously or in microtasks) does not count as growth, so a panel that
   // is filled at once adds no wait; nor does a change that adds nothing (a clock ticking). An
-  // indicator the panel already held before the click no longer counts once the panel has not
-  // changed for PANEL_QUIET ms after it (a busy flag the page never clears).
-  // Waits at least `o.expandDelay` and at most `o.panelTimeout`; beyond `o.expandDelay`, at most
-  // `o.panelWaitBudget` ms in all per capture (counted in `state.panelWait`), and not at all once
-  // MAX_IDLE_TIMEOUTS waits in a row ran out without the panels changing.
+  // indicator shown before the click (or the panel's own busy flag, set before it) no longer counts
+  // once the panel has not changed for PANEL_QUIET ms (a busy flag the page never clears); one in
+  // a panel still hidden then was not shown, so it counts (a spinner rendered ahead of time).
+  // Waits at least `o.expandDelay` and at most `o.panelTimeout`; after the pause of `o.expandDelay`
+  // (however late it ends), at most `o.panelWaitBudget` ms in all per capture (counted in
+  // `state.panelWait`), and not at all once MAX_IDLE_TIMEOUTS waits in a row ran out without the
+  // panels changing.
   async function clickAndWait(control, resolve, named, state, o) {
     const start = performance.now();
     const wait = state.panelWait;
@@ -588,10 +590,12 @@
     let counting = false;
     let changed = -Infinity;
     let touched = false;
+    let lastTouch = -Infinity;
     const observer = new MutationObserver(() => {
       track();
       if (!counting) return;
       touched = true;
+      lastTouch = performance.now();
       for (const [p, size] of sizes) {
         const now = contentSize(p);
         if (now > size) { sizes.set(p, now); changed = performance.now(); }
@@ -607,9 +611,11 @@
       }
     };
     track();
-    const old = new Set(Array.from(sizes.keys()).flatMap(indicatorsOf));
+    const old = new Set(Array.from(sizes.keys()).flatMap((p) =>
+      indicatorsOf(p).filter((el) => el === p || isIndicatorShown(el, p))));
     const none = new Set();
     let timedOut = false;
+    let charged = Infinity;
     try {
       control.click();
       // Lets the click's own microtasks, and the observer's report of what they changed, run first.
@@ -622,12 +628,13 @@
       counting = true;
       const clicked = performance.now();
       const left = wait.idle >= MAX_IDLE_TIMEOUTS ? 0 : Math.max(0, o.panelWaitBudget - wait.spent);
-      const end = start + Math.min(o.panelTimeout, o.expandDelay + left);
       await pause(o.expandDelay);
+      charged = performance.now();
+      const end = Math.min(start + o.panelTimeout, charged + left);
       for (;;) {
         if (collector.stopRequested) return;
         const now = performance.now();
-        const ignored = !touched && now - clicked >= PANEL_QUIET ? old : none;
+        const ignored = now - Math.max(clicked, lastTouch) >= PANEL_QUIET ? old : none;
         const arriving = now - changed < PANEL_QUIET || Array.from(sizes.keys()).some((p) => p.isConnected &&
           isRendered(p) && ((named && isEmptyPanel(p)) || isLoadingPanel(p, ignored)));
         if (!arriving) return;
@@ -636,7 +643,7 @@
       }
     } finally {
       observer.disconnect();
-      wait.spent += Math.max(0, performance.now() - start - o.expandDelay);
+      wait.spent += Math.max(0, performance.now() - charged);
       if (wait.idle < MAX_IDLE_TIMEOUTS) wait.idle = timedOut && !touched ? wait.idle + 1 : 0;
     }
   }
