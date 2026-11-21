@@ -155,7 +155,15 @@ public final class PageCaptureBridge {
 
     // MARK: Messages
 
+    /// Pop-ups share the configuration, so their frames run the scripts and post here too; only the
+    /// bridge's own web view is listened to, so a pop-up is never picked, collected or registered.
+    private func isFromOwnWebView(_ message: WKScriptMessage) -> Bool {
+        guard let webView else { return false }
+        return message.webView === webView
+    }
+
     fileprivate func receive(_ message: WKScriptMessage) {
+        guard isFromOwnWebView(message) else { return }
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         let frame = message.frameInfo
         switch type {
@@ -185,7 +193,7 @@ public final class PageCaptureBridge {
     /// Answers a capture's `frameVideos` request: runs `frameVideos()` in each child frame it names
     /// and returns `[token: JSON array]` for the frames that answered.
     fileprivate func answer(_ message: WKScriptMessage) async -> [String: String] {
-        guard let body = message.body as? [String: Any], body["type"] as? String == "frameVideos",
+        guard isFromOwnWebView(message), let body = message.body as? [String: Any], body["type"] as? String == "frameVideos",
               let tokens = body["tokens"] as? [String] else { return [:] }
         let options = body["options"] as? [String: Any] ?? [:]
         let clock = ContinuousClock()

@@ -4,8 +4,17 @@ import XCTest
 
 final class KeyCommandTests: XCTestCase {
     private func event(_ keyCode: UInt16, _ characters: String? = nil, _ flags: NSEvent.ModifierFlags = [],
-                       in phase: CapturePhase = .picking) -> CaptureEvent? {
-        KeyCommand.event(keyCode: keyCode, characters: characters, flags: flags, phase: phase)
+                       in phase: CapturePhase = .picking, inCaptureWindow: Bool = true) -> CaptureEvent? {
+        KeyCommand.event(keyCode: keyCode, characters: characters, flags: flags, phase: phase,
+                         inCaptureWindow: inCaptureWindow)
+    }
+
+    /// Return typed in a pop-up's form, or to answer a dialog sheet, must not pick the whole page.
+    func testEscapeAndReturnOutsideTheCaptureWindowPassThrough() {
+        XCTAssertNil(event(53, inCaptureWindow: false))
+        XCTAssertNil(event(36, inCaptureWindow: false))
+        XCTAssertNil(event(76, inCaptureWindow: false))
+        XCTAssertEqual(event(1, "s", [.command, .shift], inCaptureWindow: false), .shortcut)
     }
 
     func testEscapeAndReturnWhilePicking() {

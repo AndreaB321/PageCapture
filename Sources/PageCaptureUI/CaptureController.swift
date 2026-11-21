@@ -13,6 +13,8 @@ public final class CaptureController {
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var collected: CapturedContent?
     @ObservationIgnored private let navigationDelegate = NavigationDelegate()
+    /// The web view's UI delegate: new windows and pop-ups (which are never capture targets).
+    @ObservationIgnored let popupPresenter: PopupPresenter
     /// Bumped when a collection is aborted, so its late result is ignored.
     @ObservationIgnored private var collectionGeneration = 0
 
@@ -32,17 +34,33 @@ public final class CaptureController {
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         bridge.webView = webView
+        popupPresenter = PopupPresenter(mainWebView: webView)
+        webView.uiDelegate = popupPresenter
         bridge.onPick = { [weak self] target in self?.send(.picked(target)) }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             let keyCode = event.keyCode
             let characters = event.charactersIgnoringModifiers
             let flags = event.modifierFlags
+            let windowNumber = event.windowNumber
             // Consuming ⌘⇧S here also keeps the menu item from firing it a second time.
-            let consumed = MainActor.assumeIsolated { self.handleKey(keyCode, characters: characters, flags: flags) }
+            let consumed = MainActor.assumeIsolated {
+                self.handleKey(keyCode, characters: characters, flags: flags, windowNumber: windowNumber)
+            }
             return consumed ? nil : event
         }
-        navigationDelegate.onCommit = { [weak self] in self?.send(.navigated) }
+        // A dialog would hold up a capture, and a page could loop on alert(): none while one runs.
+        popupPresenter.suppressPanels = { [weak self] in
+            switch self?.machine.phase {
+            case .picking, .capturing, .stopping: true
+            case .idle, .saving, nil: false
+            }
+        }
+        navigationDelegate.onCommit = { [weak self] in
+            guard let self else { return }
+            popupPresenter.pageDidChange(in: webView)
+            send(.navigated)
+        }
         webView.navigationDelegate = navigationDelegate
     }
 
@@ -68,7 +86,12 @@ public final class CaptureController {
     }
 
     public func send(_ event: CaptureEvent) {
-        for effect in machine.handle(event) {
+        let wasIdle = machine.phase == .idle
+        let effects = machine.handle(event)
+        // A dialog already on screen would block the page being picked or captured; later ones are
+        // suppressed (see `suppressPanels`).
+        if wasIdle, machine.phase != .idle { popupPresenter.finishAllPanels() }
+        for effect in effects {
             perform(effect)
         }
     }
@@ -186,10 +209,13 @@ public final class CaptureController {
 
     // MARK: Keys
 
-    /// ⌘⇧S (any state), and Esc / Return while picking, wherever focus is; see `KeyCommand`.
-    /// Returns whether the key was consumed.
-    private func handleKey(_ keyCode: UInt16, characters: String?, flags: NSEvent.ModifierFlags) -> Bool {
-        guard let event = KeyCommand.event(keyCode: keyCode, characters: characters, flags: flags, phase: machine.phase)
+    /// ⌘⇧S (any state, any window), and Esc / Return while picking when typed in the capture window
+    /// with no sheet on it; see `KeyCommand`. Returns whether the key was consumed.
+    func handleKey(_ keyCode: UInt16, characters: String?, flags: NSEvent.ModifierFlags, windowNumber: Int) -> Bool {
+        let window = webView.window
+        let inCaptureWindow = windowNumber > 0 && window?.windowNumber == windowNumber && window?.attachedSheet == nil
+        guard let event = KeyCommand.event(keyCode: keyCode, characters: characters, flags: flags,
+                                           phase: machine.phase, inCaptureWindow: inCaptureWindow)
         else { return false }
         send(event)
         return true
