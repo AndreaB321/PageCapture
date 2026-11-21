@@ -42,44 +42,6 @@ final class PopupPresenterTests: XCTestCase {
                        NSSize(width: NewWindowPolicy.minimumPopupSize.width, height: 900))
     }
 
-    // MARK: Title
-
-    /// A page chooses its own title, so the host always leads and a page off https is marked.
-    func testPopupTitleAlwaysShowsTheOrigin() {
-        func title(_ url: URL?, _ pageTitle: String?, creator: SiteOrigin? = nil) -> String {
-            PopupPresenter.Popup.title(origin: PopupPresenter.Popup.origin(committedURL: url, creator: creator),
-                                       pageTitle: pageTitle)
-        }
-        XCTAssertEqual(title(URL(string: "https://accounts.example.com/signin"), "Sign in"),
-                       "accounts.example.com — Sign in")
-        XCTAssertEqual(title(URL(string: "https://evil.example/"), "accounts.google.com"),
-                       "evil.example — accounts.google.com")
-        XCTAssertEqual(title(URL(string: "https://accounts.example.com/"), ""), "accounts.example.com")
-        XCTAssertEqual(title(URL(string: "https://accounts.example.com/"), nil), "accounts.example.com")
-        XCTAssertEqual(title(URL(string: "http://login.example.com/"), "Sign in"),
-                       "Not Secure — login.example.com — Sign in")
-        XCTAssertEqual(title(URL(string: "https://accounts.example.com:81/"), nil), "accounts.example.com:81")
-        XCTAssertEqual(title(URL(string: "about:blank"), nil), "Not Secure — about:blank")
-        XCTAssertEqual(title(nil, nil), "Not Secure — about:blank")
-    }
-
-    /// Documents that have no host of their own say where they come from: an about:blank pop-up its
-    /// opener writes into shows the opener, a blob: URL the origin inside it.
-    func testPopupOriginOfDocumentsWithoutAHost() {
-        let origin = PopupPresenter.Popup.origin
-        let evil = SiteOrigin(scheme: "https", host: "evil.example", port: 443)
-        XCTAssertEqual(origin(URL(string: "about:blank"), evil).text, "evil.example")
-        XCTAssertTrue(origin(URL(string: "about:blank"), evil).secure)
-        XCTAssertEqual(origin(nil, SiteOrigin(scheme: "http", host: "evil.example", port: 8080)),
-                       .init(text: "evil.example:8080", secure: false))
-        XCTAssertEqual(origin(URL(string: "blob:https://evil.example/0b5c-41"), nil),
-                       .init(text: "evil.example", secure: true))
-        XCTAssertEqual(origin(URL(string: "blob:null/0b5c-41"), evil), .init(text: "blob URL", secure: false))
-        XCTAssertEqual(origin(URL(string: "data:text/html,<p>accounts.google.com"), evil),
-                       .init(text: "data URL from evil.example", secure: false))
-        XCTAssertEqual(origin(URL(string: "file:///tmp/a.html"), evil), .init(text: "file", secure: false))
-    }
-
     // MARK: Windows
 
     /// A controller whose web view sits in a window, with `html` loaded from a file in a temporary folder.
@@ -302,6 +264,117 @@ final class PopupPresenterTests: XCTestCase {
         }
     }
 
+    /// Waits until `title` has been the pop-up's title for a while, so a later change would show.
+    private func waitUntilSteady(_ popup: PopupPresenter.Popup, _ title: String) async throws {
+        try await waitUntil("pop-up title is \(title)") { popup.window.title == title }
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(popup.window.title, title)
+    }
+
+    /// WebKit moves the back-forward list to the entry being gone back to as soon as the navigation
+    /// starts. A page that goes back to a page that does not answer, then replaces itself with a page of its own,
+    /// must still show its own origin.
+    func testGoingBackThenReplacingThePageShowsThePagesOwnOrigin() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.open('pctest://bank.test/onceA')", from: main, in: presenter)
+        try await waitUntil("pop-up shows the bank") {
+            popup.window.title == "Not Secure — bank.test — onceA"
+        }
+        _ = try await evaluate("location.href = 'pctest://evil.test/fake'; 'ok'", in: popup.webView)
+        try await waitUntil("pop-up shows the fake page") { popup.window.title == "Not Secure — evil.test — fake" }
+
+        _ = try await evaluate("history.back(); setTimeout(() => location.replace('/fake2'), 30); 'ok'",
+                               in: popup.webView)
+        try await waitUntilSteady(popup, "Not Secure — evil.test — fake2")
+    }
+
+    /// The same, reloading the page instead.
+    func testGoingBackThenReloadingThePageShowsThePagesOwnOrigin() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.open('pctest://bank.test/onceA')", from: main, in: presenter)
+        try await waitUntil("pop-up shows the bank") {
+            popup.window.title == "Not Secure — bank.test — onceA"
+        }
+        _ = try await evaluate("location.href = 'pctest://evil.test/fake'; 'ok'", in: popup.webView)
+        try await waitUntil("pop-up shows the fake page") { popup.window.title == "Not Secure — evil.test — fake" }
+
+        _ = try await evaluate("history.back(); setTimeout(() => location.reload(), 30); document.title = 'again'; 'ok'",
+                               in: popup.webView)
+        try await waitUntil("reloaded") { popup.webView.title == "fake" && !popup.webView.isLoading }
+        try await waitUntilSteady(popup, "Not Secure — evil.test — fake")
+    }
+
+    /// A named window opened blank by one site, then reused by another site that writes into it,
+    /// shows the site that wrote it, never the one that opened it.
+    func testReusedNamedBlankPopupShowsTheSiteThatWroteIt() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.open('', 'oauth')", from: main, in: presenter)
+        main.load(URLRequest(url: URL(string: "pctest://evil.test/E")!))
+        try await waitUntil("main window shows the other site") { main.title == "E" && !main.isLoading }
+
+        _ = try await evaluate("window.w = window.open('about:blank', 'oauth'); 'ok'", in: main)
+        XCTAssertEqual(presenter.popups.count, 1, "the named pop-up is reused")
+        try await waitUntil("blank page written") {
+            try await self.evaluate("""
+                try { w.document.write('<title>Sign in</title><p>accounts.google.com'); w.document.close(); 'ok' }
+                catch (e) { 'not yet' }
+                """, in: main) == "ok"
+        }
+        try await waitUntilSteady(popup, "Not Secure — evil.test — Sign in")
+    }
+
+    /// A pop-up showing another site, that its opener sends to about:blank and writes into, shows the
+    /// opener's origin: the blank page is the opener's.
+    func testPopupSentToBlankByItsOpenerShowsTheOpenersOrigin() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.w = window.open('pctest://site.test/B')", from: main, in: presenter)
+        try await waitUntil("pop-up shows its page") { popup.window.title == "Not Secure — site.test — B" }
+
+        _ = try await evaluate("w.location = 'about:blank'; 'ok'", in: main)
+        try await waitUntil("blank page written") {
+            try await self.evaluate("""
+                try { w.document.write('<title>Sign in</title>'); w.document.close(); 'ok' }
+                catch (e) { 'not yet' }
+                """, in: main) == "ok"
+        }
+        try await waitUntilSteady(popup, "Not Secure — opener.test — Sign in")
+    }
+
+    /// The origin is read where the page cannot redefine it: changing `window.origin` or `location`
+    /// in the page's own world does not change what the bar shows.
+    func testPageCannotChangeTheOriginShownByRedefiningIt() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.open('pctest://evil.test/B')", from: main, in: presenter)
+        try await waitUntil("pop-up shows its page") { popup.window.title == "Not Secure — evil.test — B" }
+
+        _ = try await evaluate("""
+            Object.defineProperty(window, 'origin', { get: () => 'https://accounts.google.com' });
+            try { Object.defineProperty(location, 'origin', { get: () => 'https://accounts.google.com' }) } catch {}
+            try { Object.defineProperty(self, 'location', { get: () => ({ origin: 'https://accounts.google.com' }) }) }
+            catch {}
+            history.pushState(null, '', '/signin');
+            document.title = 'Sign in'; 'ok'
+            """, in: popup.webView)
+        try await waitUntilSteady(popup, "Not Secure — evil.test — Sign in")
+    }
+
+    /// A blob: page shows the origin inside its URL.
+    func testBlobPopupShowsTheOriginInsideIt() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.open('pctest://site.test/B')", from: main, in: presenter)
+        try await waitUntil("pop-up shows its page") { popup.window.title == "Not Secure — site.test — B" }
+        _ = try await evaluate("""
+            location.href = URL.createObjectURL(new Blob(['<title>Blob</title>'], { type: 'text/html' })); 'ok'
+            """, in: popup.webView)
+        try await waitUntilSteady(popup, "Not Secure — site.test — Blob")
+    }
+
     /// A script `click()` on a link is reported as link-activated, like a real click, so this drives
     /// the in-place path end to end.
     func testTargetBlankLinkLoadsInTheMainWebView() async throws {
@@ -473,24 +546,32 @@ final class PopupPresenterTests: XCTestCase {
     }
 }
 
-/// Serves `pctest://<host>/<name>` as a page titled `<name>`. `/hang` never answers, so its navigation
-/// stays pending; `/fail` fails.
+/// Serves `pctest://<host>/<name>` as a page titled `<name>`, with `Cache-Control: no-store`. `/hang`
+/// never answers, so its navigation stays pending; `/fail` fails; `/once…` answers only the first
+/// time, so going back to it stays pending.
+@MainActor
 private final class HostSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "pctest"
+    private var served: Set<URL> = []
 
     func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
         guard let url = task.request.url else { return }
-        switch url.lastPathComponent {
+        let name = url.lastPathComponent
+        switch name {
         case "hang":
             return
         case "fail":
             task.didFailWithError(URLError(.cannotConnectToHost))
-        case let name:
+        case _ where name.hasPrefix("once") && !served.insert(url).inserted:
+            return
+        default:
             let body = Data("<title>\(name)</title><p>\(url.host() ?? "")</p>".utf8)
-            task.didReceive(URLResponse(url: url, mimeType: "text/html", expectedContentLength: body.count,
-                                        textEncodingName: "utf-8"))
+            let headers = ["Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"]
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                            headerFields: headers)!)
             task.didReceive(body)
-            task.didFinish()
+            // A `/once…` page never finishes loading, so WebKit does not keep it to go back to.
+            if !name.hasPrefix("once") { task.didFinish() }
         }
     }
 

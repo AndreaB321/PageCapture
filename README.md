@@ -193,6 +193,7 @@ Chrome.
 Sign-in pop-ups, such as "Sign in with Google", and any other window a page opens by itself,
 open in a window of their own and close themselves when you are done. A bar under the pop-up's
 title always shows the site it is showing, and says "Not Secure" when the page is not on https.
+When the page has no site to show, or has not said yet, the bar says "unknown origin".
 When the window is narrow the site's name is shortened at its start, so its end, the part that
 tells you whose site it is, stays visible. Pop-up windows are never captured: picking and
 capturing only work in the main window. A link you click that would open a new window opens in

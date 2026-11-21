@@ -35,12 +35,6 @@ struct SiteOrigin: Equatable {
         self.init(scheme: scheme, host: url.host() ?? "", port: url.port)
     }
 
-    /// Nil for an opaque origin (a sandboxed frame), which has neither scheme nor host.
-    @MainActor init?(_ origin: WKSecurityOrigin) {
-        guard !origin.protocol.isEmpty else { return nil }
-        self.init(scheme: origin.protocol, host: origin.host, port: origin.port)
-    }
-
     /// "host" or "host:port"; the scheme for a URL without a host, such as a file.
     var text: String {
         guard !host.isEmpty else { return scheme }
@@ -93,12 +87,9 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         let window: NSWindow
         private weak var presenter: PopupPresenter?
         private var observations: [NSKeyValueObservation] = []
-        /// The URL of the page last committed in the pop-up. `webView.url` cannot be used: it reports a
-        /// pending navigation's URL while the old page is still shown, and keeps it if the load fails.
-        private var committedURL: URL?
-        /// The opener's origin, kept while the pop-up only shows documents its opener made (about:blank,
-        /// a data URL).
-        private var creator: SiteOrigin?
+        /// The origin on screen: the last answer of the document now shown, else `unknown`.
+        private var shownOrigin = OriginText.unknown
+        private var requests = OriginRequests()
         /// Where the page comes from, in a field of its own under the title bar. It is cut at its start,
         /// so the end of the host, the part a site cannot choose, always shows.
         let originField = NSTextField(labelWithString: "")
@@ -109,27 +100,59 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         struct OriginText: Equatable {
             var text: String
             var secure: Bool
+
+            /// Shown while the document on screen has not given its origin, and for a document whose
+            /// origin has no host (opaque: a sandboxed page, a data: URL).
+            static let unknown = OriginText(text: "unknown origin", secure: false)
         }
 
-        /// Where the pop-up's page comes from: the host (and a port other than the scheme's default) of
-        /// the committed URL. An about: page shows `creator`'s, a blob: URL the origin inside it, and a
-        /// data: URL says what it is.
-        static func origin(committedURL url: URL?, creator: SiteOrigin?) -> OriginText {
-            let scheme = url?.scheme?.lowercased() ?? "about"
-            switch scheme {
-            case "about":
-                return creator.map { OriginText(text: $0.text, secure: $0.secure) }
-                    ?? OriginText(text: "about:blank", secure: false)
-            case "data":
-                return OriginText(text: creator.map { "data URL from \($0.text)" } ?? "data URL", secure: false)
-            case "blob":
-                let inner = url.flatMap { URL(string: String($0.absoluteString.dropFirst("blob:".count))) }
-                guard let inner, let site = SiteOrigin(url: inner), !site.host.isEmpty
-                else { return OriginText(text: "blob URL", secure: false) }
-                return OriginText(text: site.text, secure: site.secure)
-            default:
-                guard let url, let site = SiteOrigin(url: url) else { return OriginText(text: scheme, secure: false) }
-                return OriginText(text: site.text, secure: site.secure)
+        /// The origin script's own world: a page can redefine `self.origin` or `location` in its world,
+        /// not in this one.
+        static let originWorld = WKContentWorld.world(name: "PageCapturePopupOrigin")
+        /// The origin of the document in the main frame, as the document has it: an about:blank or
+        /// srcdoc document has the origin of the page that made it, a blob: URL the origin inside it.
+        /// WebKit gives a file the opaque origin "null"; it is told apart, as "file://".
+        static let originScript = """
+            self.origin !== 'null' ? self.origin : location.protocol === 'file:' ? 'file://' : 'null'
+            """
+
+        /// What the origin script returned: "scheme://host[:port]" shows the host (punycode as given,
+        /// and a port other than the scheme's default); a file shows "file"; "null" (an opaque origin),
+        /// a failed evaluation or anything else is unknown. Only https is secure.
+        static func origin(evaluated result: Result<Any, any Error>) -> OriginText {
+            guard case .success(let value) = result, let serialized = value as? String,
+                  let url = URL(string: serialized), let site = SiteOrigin(url: url)
+            else { return .unknown }
+            guard !site.host.isEmpty else {
+                return site.scheme == "file" ? OriginText(text: "file", secure: false) : .unknown
+            }
+            return OriginText(text: site.text, secure: site.secure)
+        }
+
+        /// Which answers of the origin script may be shown: only one newer than the last shown, and
+        /// none asked for before the document now on screen committed.
+        struct OriginRequests {
+            private var issued = 0
+            private var committed = 0
+            private var shown = 0
+
+            /// A request about the document on screen.
+            mutating func next() -> Int {
+                issued += 1
+                return issued
+            }
+
+            /// A request about a document that just committed: answers to earlier requests are stale.
+            mutating func commit() -> Int {
+                committed = next()
+                return committed
+            }
+
+            /// Whether the answer to `request` may be shown; if so, it is the last shown.
+            mutating func accept(_ request: Int) -> Bool {
+                guard request >= committed, request > shown else { return false }
+                shown = request
+                return true
             }
         }
 
@@ -143,10 +166,9 @@ final class PopupPresenter: NSObject, WKUIDelegate {
             return parts.joined(separator: " — ")
         }
 
-        init(webView: WKWebView, size: NSSize, opener: SiteOrigin?, presenter: PopupPresenter) {
+        init(webView: WKWebView, size: NSSize, presenter: PopupPresenter) {
             self.webView = webView
             self.presenter = presenter
-            creator = opener
             window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
@@ -162,12 +184,21 @@ final class PopupPresenter: NSObject, WKUIDelegate {
             window.setContentSize(size)
             window.delegate = self
             webView.navigationDelegate = self
+            // An opener writing into the pop-up's document commits nothing, and a same-document
+            // navigation only changes the URL: the origin is asked again on a title or URL change.
             observations = [
                 webView.observe(\.title, options: [.new]) { [weak self] _, _ in
-                    MainActor.assumeIsolated { self?.showOrigin() }
+                    MainActor.assumeIsolated {
+                        self?.showOrigin()
+                        self?.askOrigin()
+                    }
+                },
+                webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.askOrigin() }
                 },
             ]
             showOrigin()
+            askOrigin()
         }
 
         /// The bar under the title bar: "Not Secure" (when so), the origin, then the page's title, which
@@ -196,24 +227,35 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         }
 
         private func showOrigin() {
-            let origin = Self.origin(committedURL: committedURL, creator: creator)
-            originField.stringValue = origin.text
-            securityField.isHidden = origin.secure
+            originField.stringValue = shownOrigin.text
+            securityField.isHidden = shownOrigin.secure
             pageTitleField.stringValue = webView.title ?? ""
-            window.title = Self.title(origin: origin, pageTitle: webView.title)
+            window.title = Self.title(origin: shownOrigin, pageTitle: webView.title)
         }
 
-        /// Only a committed page changes the origin shown. A failed load leaves the last one; a
-        /// same-document navigation (history.pushState, a #fragment) cannot change the origin.
-        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-            // The back-forward list's current item is the committed page: unlike `webView.url`, it
-            // cannot already name a navigation the page started right after this commit.
-            committedURL = webView.backForwardList.currentItem?.url ?? webView.url
-            if let scheme = committedURL?.scheme?.lowercased(), scheme != "about", scheme != "data" {
-                creator = nil
+        /// Asks the document in the main frame for its origin, and shows the answer unless a newer one
+        /// was shown or another document committed since. URLs and the back-forward list are not used:
+        /// they can name a navigation that has started while the old document is still on screen.
+        private func askOrigin(_ request: Int? = nil) {
+            let request = request ?? requests.next()
+            webView.evaluateJavaScript(Self.originScript, in: nil, in: Self.originWorld) { [weak self] result in
+                guard let self, requests.accept(request) else { return }
+                shownOrigin = Self.origin(evaluated: result)
+                showOrigin()
             }
+        }
+
+        /// A new document is on screen: the old origin goes at once, and the new one shows when the
+        /// document gives it. A pending or failed load commits nothing, so the old document stays.
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            shownOrigin = .unknown
             showOrigin()
+            askOrigin(requests.commit())
             presenter?.pageDidChange(in: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            askOrigin()
         }
 
         func windowWillClose(_ notification: Notification) {
@@ -307,9 +349,7 @@ final class PopupPresenter: NSObject, WKUIDelegate {
             webView.load(navigationAction.request)
             return nil
         case .openPopup:
-            // The pop-up starts on an empty document of the opener's origin, which the opener can write.
             return openPopup(configuration: configuration, features: WindowFeatureValues(windowFeatures),
-                             opener: SiteOrigin(navigationAction.sourceFrame.securityOrigin),
                              over: mainWebView?.window)
         }
     }
@@ -320,14 +360,14 @@ final class PopupPresenter: NSObject, WKUIDelegate {
 
     /// WebKit loads the request into the returned web view itself.
     private func openPopup(configuration: WKWebViewConfiguration, features: WindowFeatureValues,
-                           opener: SiteOrigin?, over parent: NSWindow?) -> WKWebView {
+                           over parent: NSWindow?) -> WKWebView {
         // `configuration` must be used as given: it links the pop-up to its opener.
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.uiDelegate = self
         let screen = (parent?.screen ?? NSScreen.main)?.visibleFrame
         let size = NewWindowPolicy.popupSize(features: features,
                                              fitting: screen?.size ?? NewWindowPolicy.defaultPopupSize)
-        let popup = Popup(webView: webView, size: size, opener: opener, presenter: self)
+        let popup = Popup(webView: webView, size: size, presenter: self)
         if let parent {
             let frame = popup.window.frame
             popup.window.setFrameOrigin(NSPoint(x: parent.frame.midX - frame.width / 2,

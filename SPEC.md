@@ -18,17 +18,21 @@ area inside it, and saves it as PDF and/or Markdown with the images saved separa
   main window closes. They share the browser's cookies, so a sign-in done in a pop-up persists.
 - A pop-up always shows the origin of the page in it, so a page cannot pass itself off as another
   site, such as a fake sign-in page:
-  - The origin is the host, with the port when it is not the scheme's default, of the last page
-    that committed in the pop-up. A navigation still loading, or one that failed, does not change
-    it, as the old page is still the one on screen.
+  - The origin is the one the document on screen has: the host, with the port when it is not the
+    scheme's default. It is asked of the document itself, in a script world of the app's own that
+    the page cannot change, never worked out from URLs or the history, each time a new document
+    commits (and when the page's title or URL changes). Until the new document has answered, the
+    bar says "unknown origin": the old origin never stays over a new document. A navigation still
+    loading, or one that failed, does not change it, as the old page is still the one on screen.
   - It is shown in a bar under the title bar, cut at its start when the window is narrow, so the
     end of the host (the registrable domain, which a site cannot choose) always shows. Pop-ups are
     at least 400 points wide. The window title (Window menu, accessibility) holds the full origin
     followed by the page's title.
-  - A blank pop-up (`window.open('')`, about:blank) that its opener writes into shows the opener's
-    origin until it loads a page of its own; a `blob:` URL shows the origin inside it; a `data:`
-    URL says "data URL from" the opener's origin.
-  - A page not served over https is marked "Not Secure".
+  - A blank document (`window.open('')`, about:blank) shows the origin of the page that made it,
+    which may not be the opener; a `blob:` URL shows the origin inside it; a local file shows
+    "file". A document whose origin has no host (sandboxed, a `data:` URL), or that cannot be
+    asked, shows "unknown origin".
+  - A page whose origin is not https is marked "Not Secure", and so is "unknown origin".
 - A pop-up window is never a capture target: picking and capturing only ever work in the main
   window's page.
 - JavaScript alert, confirm and prompt dialogs are shown as sheets. From a page's second dialog
