@@ -97,6 +97,34 @@ final class CaptureIntegrationTests: XCTestCase {
         try await waitUntil("pick from the main web view") { harness.picks.targets == [.wholePage] }
     }
 
+    /// The ask handler answers only the bridge's own web view, so a pop-up cannot have `frameVideos()`
+    /// run in the main page's frames.
+    func testAskHandlerIgnoresAnotherWebViewSharingTheConfiguration() async throws {
+        let harness = try await makeHarness()
+        defer { harness.window.close() }
+        let iframe = try XCTUnwrap(harness.iframe)
+        // Name the main page's iframe, as a capture does.
+        _ = try await evaluate("window.webkit.messageHandlers.pageCapture.postMessage({ type: 'frameToken', token: 'tok' }); 'ok'",
+                               in: harness.webView, frame: iframe, world: PageCaptureBridge.contentWorld)
+        let popup = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300),
+                              configuration: harness.webView.configuration)
+        popup.load(URLRequest(url: URL(string: "pctest://popup.test/docs/frame.html")!))
+        try await waitUntil("pop-up loaded") {
+            let state = try? await self.evaluate("document.readyState", in: popup, world: .page)
+            return state == "complete"
+        }
+
+        let ask = """
+            const reply = await window.webkit.messageHandlers.pageCaptureAsk.postMessage(
+              { type: 'frameVideos', tokens: ['tok'], options: { reveal: false } });
+            return JSON.stringify(Object.keys(reply || {}));
+            """
+        let fromPopup = try await callAsync(ask, in: popup)
+        XCTAssertEqual(fromPopup, "[]", "the pop-up's ask was answered")
+        let fromMain = try await callAsync(ask, in: harness.webView)
+        XCTAssertEqual(fromMain, "[\"tok\"]")
+    }
+
     func testFixtureIframeIsCrossOrigin() async throws {
         let harness = try await makeHarness()
         defer { harness.window.close() }
@@ -658,6 +686,18 @@ final class CaptureIntegrationTests: XCTestCase {
 
     private func evaluate(_ script: String, in harness: Harness, frame: WKFrameInfo?) async throws -> String? {
         try await evaluate(script, in: harness.webView, frame: frame, world: .page)
+    }
+
+    /// Runs `body` as an async function in the capture scripts' world of `webView`'s main frame.
+    private func callAsync(_ body: String, in webView: WKWebView) async throws -> String? {
+        try await withCheckedThrowingContinuation { continuation in
+            webView.callAsyncJavaScript(body, arguments: [:], in: nil, in: PageCaptureBridge.contentWorld) { result in
+                switch result {
+                case .success(let value): continuation.resume(returning: value as? String)
+                case .failure(let error): continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     private func evaluate(_ script: String, in webView: WKWebView, frame: WKFrameInfo? = nil,

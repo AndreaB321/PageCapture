@@ -190,9 +190,12 @@ To capture a page that needs an account, sign in inside PageCapture's own window
 browser. PageCapture keeps that sign-in for next time. It does not use the sign-ins of Safari or
 Chrome.
 
-Sign-in pop-ups, such as "Sign in with Google", open in a small window of their own and close
-themselves when you are done. Links that would open a new window open in the PageCapture window
-instead; Back returns to the page before.
+Sign-in pop-ups, such as "Sign in with Google", and any other window a page opens by itself,
+open in a window of their own and close themselves when you are done. The pop-up's title always
+starts with the site it is showing, and says "Not Secure" when the page is not on https. Pop-up
+windows are never captured: picking and capturing only work in the main window. A link you click
+that would open a new window opens in the PageCapture window instead; Back returns to the page
+before.
 
 When saving videos from YouTube or Vimeo, only that site's own cookies are passed to the download
 tool, in a private temporary file that is deleted straight away. Nothing temporary is written into

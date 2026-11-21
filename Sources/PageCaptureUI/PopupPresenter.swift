@@ -1,41 +1,18 @@
 import AppKit
 import WebKit
 
-/// The parts of `WKWindowFeatures` the new-window decision reads, as plain values so it can be tested.
+/// The parts of `WKWindowFeatures` a pop-up's size is read from, as plain values so it can be tested.
 struct WindowFeatureValues: Equatable {
     var width: Double?
     var height: Double?
-    var x: Double?
-    var y: Double?
-    var menuBar: Bool?
-    var statusBar: Bool?
-    var toolbars: Bool?
-    var resizing: Bool?
 
-    init(width: Double? = nil, height: Double? = nil, x: Double? = nil, y: Double? = nil,
-         menuBar: Bool? = nil, statusBar: Bool? = nil, toolbars: Bool? = nil, resizing: Bool? = nil) {
+    init(width: Double? = nil, height: Double? = nil) {
         self.width = width
         self.height = height
-        self.x = x
-        self.y = y
-        self.menuBar = menuBar
-        self.statusBar = statusBar
-        self.toolbars = toolbars
-        self.resizing = resizing
     }
 
     @MainActor init(_ features: WKWindowFeatures) {
-        self.init(width: features.width?.doubleValue, height: features.height?.doubleValue,
-                  x: features.x?.doubleValue, y: features.y?.doubleValue,
-                  menuBar: features.menuBarVisibility?.boolValue, statusBar: features.statusBarVisibility?.boolValue,
-                  toolbars: features.toolbarsVisibility?.boolValue, resizing: features.allowsResizing?.boolValue)
-    }
-
-    /// The page asked for a window of its own shape: a size or position, or bars turned off.
-    /// `target="_blank"` and `window.open(url)` ask for none of these.
-    var describesPopup: Bool {
-        width != nil || height != nil || x != nil || y != nil
-            || [menuBar, statusBar, toolbars, resizing].contains(false)
+        self.init(width: features.width?.doubleValue, height: features.height?.doubleValue)
     }
 }
 
@@ -46,15 +23,15 @@ enum NewWindowPolicy: Equatable {
     /// Open a pop-up window with the web view WebKit configured, so `window.opener` works.
     case openPopup
 
-    static let defaultPopupSize = NSSize(width: 500, height: 640)
+    static let defaultPopupSize = NSSize(width: 900, height: 700)
     static let minimumPopupSize = NSSize(width: 240, height: 180)
 
-    /// A pop-up for window features or a blank window (the opener fills it in by script); otherwise
-    /// in place. Anything a pop-up opens is another pop-up, so the page its opener waits on stays.
-    static func decision(url: URL?, features: WindowFeatureValues, fromPopup: Bool) -> NewWindowPolicy {
-        if fromPopup || features.describesPopup { return .openPopup }
-        let isBlank = url == nil || url?.absoluteString.isEmpty == true || url?.absoluteString == "about:blank"
-        return isBlank ? .openPopup : .loadInPlace
+    /// Only a link the user clicks (`target="_blank"`) loads in place, in the main window. Every window
+    /// a script opens is a pop-up: WebKit does not report the `popup` feature, so `window.open(url)`
+    /// cannot be told from a sign-in pop-up whose page needs `window.opener`. Anything a pop-up opens
+    /// is another pop-up, so the page its opener waits on stays.
+    static func decision(navigationType: WKNavigationType, fromPopup: Bool) -> NewWindowPolicy {
+        navigationType == .linkActivated && !fromPopup ? .loadInPlace : .openPopup
     }
 
     /// Content size of a pop-up: the size the page asked for, or the default, kept between the minimum
@@ -76,11 +53,21 @@ enum NewWindowPolicy: Equatable {
 final class PopupPresenter: NSObject, WKUIDelegate {
     /// A pop-up window and the web view in it; the presenter's `popups` keeps it alive until it closes.
     @MainActor
-    final class Popup: NSObject, NSWindowDelegate {
+    final class Popup: NSObject, NSWindowDelegate, WKNavigationDelegate {
         let webView: WKWebView
         let window: NSWindow
         private weak var presenter: PopupPresenter?
-        private var titleObservation: NSKeyValueObservation?
+        private var observations: [NSKeyValueObservation] = []
+
+        /// The window title: the page's host always comes first, so a page cannot pass itself off as
+        /// another site by its title, and a page not served over https says so.
+        static func title(url: URL?, pageTitle: String?) -> String {
+            let host = url?.host().flatMap { $0.isEmpty ? nil : $0 }
+            var parts = [host ?? url?.scheme ?? "about"]
+            if url?.scheme?.lowercased() != "https" { parts.insert("Not Secure", at: 0) }
+            if let pageTitle, !pageTitle.isEmpty { parts.append(pageTitle) }
+            return parts.joined(separator: " — ")
+        }
 
         init(webView: WKWebView, size: NSSize, presenter: PopupPresenter) {
             self.webView = webView
@@ -93,24 +80,68 @@ final class PopupPresenter: NSObject, WKUIDelegate {
             window.isReleasedWhenClosed = false
             window.contentView = webView
             window.delegate = self
-            titleObservation = webView.observe(\.title, options: [.initial, .new]) { [weak window] webView, _ in
-                MainActor.assumeIsolated {
-                    window?.title = webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? webView.url?.host() ?? ""
-                }
-            }
+            webView.navigationDelegate = self
+            observations = [
+                webView.observe(\.url, options: [.initial, .new]) { [weak window] webView, _ in
+                    MainActor.assumeIsolated { window?.title = Self.title(url: webView.url, pageTitle: webView.title) }
+                },
+                webView.observe(\.title, options: [.new]) { [weak window] webView, _ in
+                    MainActor.assumeIsolated { window?.title = Self.title(url: webView.url, pageTitle: webView.title) }
+                },
+            ]
+        }
+
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            presenter?.pageDidChange(in: webView)
         }
 
         func windowWillClose(_ notification: Notification) {
-            titleObservation = nil
+            observations = []
             webView.stopLoading()
             webView.uiDelegate = nil
+            webView.navigationDelegate = nil
             presenter?.remove(self)
         }
+    }
+
+    /// A JavaScript panel on screen. WebKit requires its completion handler to be called exactly once,
+    /// also when the window it is on closes first.
+    @MainActor
+    final class OpenPanel {
+        let alert: NSAlert
+        private(set) weak var webView: WKWebView?
+        private var completion: (@MainActor (NSApplication.ModalResponse) -> Void)?
+
+        fileprivate init(alert: NSAlert, webView: WKWebView,
+                         completion: @escaping @MainActor (NSApplication.ModalResponse) -> Void) {
+            self.alert = alert
+            self.webView = webView
+            self.completion = completion
+        }
+
+        /// Calls the completion handler the first time; later calls do nothing.
+        fileprivate func finish(_ response: NSApplication.ModalResponse) {
+            guard let completion else { return }
+            self.completion = nil
+            completion(response)
+        }
+    }
+
+    /// Panels shown to a web view since its page last changed, and whether the user turned the rest off.
+    private struct PanelCount {
+        var shown = 0
+        var blocked = false
     }
 
     private weak var mainWebView: WKWebView?
     /// The open pop-ups, oldest first.
     private(set) var popups: [Popup] = []
+    /// The JavaScript panels on screen, oldest first.
+    private(set) var openPanels: [OpenPanel] = []
+    private var panelCounts: [ObjectIdentifier: PanelCount] = [:]
+    /// While this returns true, panels complete at once without being shown: alert with nothing,
+    /// confirm with false, prompt with nil.
+    var suppressPanels: @MainActor () -> Bool = { false }
 
     init(mainWebView: WKWebView) {
         self.mainWebView = mainWebView
@@ -125,30 +156,38 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         for popup in popups { popup.window.close() }
     }
 
+    /// A new page committed in `webView`: its panels are counted afresh and may be shown again.
+    func pageDidChange(in webView: WKWebView) {
+        panelCounts[ObjectIdentifier(webView)] = nil
+    }
+
     fileprivate func remove(_ popup: Popup) {
+        finishPanels(in: popup.webView)
+        pageDidChange(in: popup.webView)
         popups.removeAll { $0 === popup }
     }
 
     /// Pop-ups belong to the main window's page: they close with it.
     @objc private func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, let mainWindow = mainWebView?.window,
-              window === mainWindow else { return }
+        guard let window = notification.object as? NSWindow, let mainWebView, window === mainWebView.window
+        else { return }
         closeAll()
+        finishPanels(in: mainWebView)
     }
 
     // MARK: New windows
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        let features = WindowFeatureValues(windowFeatures)
         let fromPopup = webView !== mainWebView
-        switch NewWindowPolicy.decision(url: navigationAction.request.url, features: features, fromPopup: fromPopup) {
+        switch NewWindowPolicy.decision(navigationType: navigationAction.navigationType, fromPopup: fromPopup) {
         case .loadInPlace:
             // A main-frame navigation like any other: it ends a capture in progress (see CaptureController).
             webView.load(navigationAction.request)
             return nil
         case .openPopup:
-            return openPopup(configuration: configuration, features: features, over: mainWebView?.window)
+            return openPopup(configuration: configuration, features: WindowFeatureValues(windowFeatures),
+                             over: mainWebView?.window)
         }
     }
 
@@ -182,13 +221,13 @@ final class PopupPresenter: NSObject, WKUIDelegate {
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor () -> Void) {
-        let alert = panel(message, from: frame)
+        guard let alert = panel(message, from: frame, in: webView) else { return completionHandler() }
         show(alert, in: webView) { _ in completionHandler() }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor (Bool) -> Void) {
-        let alert = panel(message, from: frame)
+        guard let alert = panel(message, from: frame, in: webView) else { return completionHandler(false) }
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         show(alert, in: webView) { completionHandler($0 == .alertFirstButtonReturn) }
@@ -197,7 +236,7 @@ final class PopupPresenter: NSObject, WKUIDelegate {
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo,
                  completionHandler: @escaping @MainActor (String?) -> Void) {
-        let alert = panel(prompt, from: frame)
+        guard let alert = panel(prompt, from: frame, in: webView) else { return completionHandler(nil) }
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(string: defaultText ?? "")
@@ -207,23 +246,53 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         show(alert, in: webView) { completionHandler($0 == .alertFirstButtonReturn ? field.stringValue : nil) }
     }
 
-    private func panel(_ message: String, from frame: WKFrameInfo) -> NSAlert {
+    /// The alert for a panel, or nil when it is not to be shown: during a capture, or after the user
+    /// turned off this page's panels. From the second panel of a page on, the alert offers that.
+    private func panel(_ message: String, from frame: WKFrameInfo, in webView: WKWebView) -> NSAlert? {
+        guard !suppressPanels() else { return nil }
+        var count = panelCounts[ObjectIdentifier(webView), default: PanelCount()]
+        guard !count.blocked else { return nil }
+        count.shown += 1
+        panelCounts[ObjectIdentifier(webView)] = count
         let alert = NSAlert()
         let host = frame.securityOrigin.host
         alert.messageText = host.isEmpty ? "This page says:" : "\(host) says:"
         alert.informativeText = message
+        if count.shown > 1 {
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Don't show more dialogs from this page"
+        }
         return alert
     }
 
     /// As a sheet on the web view's window, or a modal panel when it has none.
     private func show(_ alert: NSAlert, in webView: WKWebView,
                       completion: @escaping @MainActor (NSApplication.ModalResponse) -> Void) {
+        let open = OpenPanel(alert: alert, webView: webView) { [weak self, weak webView, weak alert] response in
+            guard let self else { return completion(response) }
+            openPanels.removeAll { $0.alert === alert }
+            if alert?.suppressionButton?.state == .on, let webView {
+                panelCounts[ObjectIdentifier(webView), default: PanelCount()].blocked = true
+            }
+            completion(response)
+        }
+        openPanels.append(open)
         guard let window = webView.window else {
-            completion(alert.runModal())
+            open.finish(alert.runModal())
             return
         }
         alert.beginSheetModal(for: window) { response in
-            MainActor.assumeIsolated { completion(response) }
+            MainActor.assumeIsolated { open.finish(response) }
+        }
+    }
+
+    /// Ends the panels shown to `webView` as cancelled, so their completion handlers are called.
+    private func finishPanels(in webView: WKWebView) {
+        for open in openPanels where open.webView === webView {
+            if let window = webView.window, let sheet = window.attachedSheet, sheet === open.alert.window {
+                window.endSheet(sheet, returnCode: .cancel)
+            }
+            open.finish(.cancel)
         }
     }
 }

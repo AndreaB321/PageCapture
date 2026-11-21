@@ -7,15 +7,23 @@ area inside it, and saves it as PDF and/or Markdown with the images saved separa
 
 - The app has its own browser window (WKWebView) with an address bar. The user pastes a URL or
   signs in there. Cookies persist between launches (default persistent website data store).
-- Links and scripts that open a new window without asking for a window shape (`target="_blank"`,
-  `window.open(url)` without window features) load in the same window, like any other link: Back
-  returns to the page before, and a capture in progress ends.
-- Pop-ups (`window.open` with window features, or of a blank page), such as "Sign in with
-  Google/Apple/Microsoft", open in a small window of their own, sized as the page asks, and keep
-  their link to the page that opened them. They close when the page closes them, when the user
-  closes them, or when the main window closes. They share the browser's cookies, so a sign-in
-  done in a pop-up persists. JavaScript alert, confirm and prompt dialogs are shown. A pop-up is
-  never a capture target: picking and capturing only ever work in the main window's page.
+- A link the user clicks that would open a new window (`target="_blank"`) loads in the same
+  window, like any other link: Back returns to the page before, and a capture in progress ends.
+- Every window a page's script opens (`window.open`, with or without window features) is a
+  pop-up, such as "Sign in with Google/Apple/Microsoft": it opens in a window of its own, sized as
+  the page asks (900×700 points when it does not ask, kept within the screen), and keeps its link
+  to the page that opened it (`window.opener`). WebKit does not tell the app whether the page asked
+  for a pop-up, so a script's new window is never loaded in place. Anything a pop-up opens is
+  another pop-up. Pop-ups close when the page closes them, when the user closes them, or when the
+  main window closes. They share the browser's cookies, so a sign-in done in a pop-up persists.
+- A pop-up's window title always starts with the host of the page in it, so a page cannot pass
+  itself off as another site by its title; a page not served over https is marked "Not Secure".
+- A pop-up window is never a capture target: picking and capturing only ever work in the main
+  window's page.
+- JavaScript alert, confirm and prompt dialogs are shown as sheets. From a page's second dialog
+  on, the user can turn off that page's further dialogs until it navigates. While picking or
+  capturing, dialogs are not shown and complete at once (alert: nothing, confirm: Cancel, prompt:
+  no answer), so a page cannot hold up a capture.
 - Content is read from the DOM, not from screenshots, so text, links and original images survive.
   Script runs in every frame, including cross-origin iframes.
 
@@ -40,7 +48,9 @@ A single shortcut, **⌘⇧S**, works while the app is frontmost:
 1. Idle → press ⌘⇧S → **picker mode**. Banner: "Pick a frame, scrolling area or article… (Return = whole page, Esc = cancel)".
    The element under the mouse (frame, scrollable area or main article) is highlighted.
    Clicking a highlighted target picks it; clicking outside any target, or pressing Return,
-   picks the whole page. Esc, or ⌘⇧S again, cancels back to idle.
+   picks the whole page. Esc, or ⌘⇧S again, cancels back to idle. Return and Esc only act when
+   typed in the main window with no sheet on it, so they still work in a pop-up's form or a
+   dialog; ⌘⇧S works from any window.
 2. Target picked → **capturing**. Banner: "Capturing…". The app auto-scrolls the target from the top
    to the bottom, collecting content in order as it loads (lazy images, infinite lists). Content
    already collected is kept even if the page later removes it (virtualised lists); duplicates are
