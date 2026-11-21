@@ -28,8 +28,9 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
   - `CaptureExporter`: the save pipeline; `HTMLExporter`, `PDFExporter`, `MarkdownExporter` render
     with `document.js`, `markdown.js` and `chrome.js` in an off-screen web view.
   - `VideoDownloader`, `Tools`: external processes (ffmpeg, yt-dlp, Deno).
-  - MarkItDown (pinned Python + MarkItDown, `Contents/Resources/markitdown`) is bundled for converting
-    documents to Markdown; no Swift code uses it yet.
+  - `DocumentConverter`: one local file to Markdown with the bundled MarkItDown (pinned Python +
+    MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (no network,
+    writes only in its work directory); no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
 - `Sources/PageCaptureUI`: windows and views; `CaptureController` performs the state machine's effects.
 - `Sources/PageCapture`: the app entry point. `Sources/ManualShots`: manual screenshots, not shipped.
 

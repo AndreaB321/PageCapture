@@ -260,7 +260,7 @@ final class RunningProcess: @unchecked Sendable {
 }
 
 /// The exit status, delivered once from `terminationHandler` to whoever awaits it.
-private final class ExitStatus: @unchecked Sendable {
+final class ExitStatus: @unchecked Sendable {
     private let lock = NSLock()
     private var status: Int32?
     private var continuation: CheckedContinuation<Int32, Never>?
