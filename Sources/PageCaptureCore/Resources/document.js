@@ -61,7 +61,15 @@
       'body { min-width: 0 !important; overflow-x: clip !important; orphans: 3; widows: 3; }\n' +
       'p, li, h1, h2, h3, h4, h5, h6, figure, img, svg, video, tr, blockquote, pre, table' +
       ' { break-inside: avoid !important; }\n' +
-      'h1, h2, h3, h4, h5, h6 { break-after: avoid !important; }';
+      'h1, h2, h3, h4, h5, h6 { break-after: avoid !important; }\n' +
+      // Wide content fits the page: code lines wrap (keeping the monospace font and the line breaks), and
+      // table cells break their text anywhere, so a table lays out within the page width.
+      'pre { white-space: pre-wrap !important; overflow-wrap: anywhere !important; max-width: 100% !important;' +
+      ' box-sizing: border-box !important; }\n' +
+      'pre code, pre samp, pre kbd { white-space: inherit !important; overflow-wrap: inherit !important; }\n' +
+      'table { max-width: 100% !important; }\n' +
+      'td, th { overflow-wrap: anywhere !important; }\n' +
+      'table[data-pc-wrap] :not(pre):not(pre *) { white-space: normal !important; }';
   }
 
   // A play button over each video's preview, and a dark frame when there is no preview.
@@ -349,7 +357,35 @@
       if (size(title) < text) changes.push([title, { 'font-size': text + 'px' }]);
     }
     for (const [el, change] of changes) important(el, change);
+    fitTables(right);
     keepHeadingsWithNext(small);
+  }
+
+  // A table whose cells still stick out of the page (text that must not wrap, fixed widths, wide
+  // images) first lets all its text wrap (`data-pc-wrap`), then, if it is still too wide, is scaled
+  // down to fit. Outer tables go first, so a nested one is measured after its parent changed.
+  function fitTables(right) {
+    const overflow = (table) => {
+      // `max-width: 100%` can hold the table's own box at the page width while its cells overflow it.
+      const box = table.getBoundingClientRect();
+      let width = box.width;
+      for (const cell of table.querySelectorAll('td, th')) {
+        width = Math.max(width, cell.getBoundingClientRect().right - box.left);
+      }
+      return { width, room: right - box.left };
+    };
+    for (const table of document.body.querySelectorAll('table')) {
+      let { width, room } = overflow(table);
+      if (width <= 0 || room <= 0 || width <= room) continue;
+      table.setAttribute('data-pc-wrap', '');
+      // Text does not shrink in proportion to `zoom` (minimum font size), so measure again each time.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        ({ width, room } = overflow(table));
+        if (width <= room) break;
+        const zoom = parseFloat(getComputedStyle(table).zoom) || 1;
+        important(table, { zoom: String(zoom * room / width) });
+      }
+    }
   }
 
   // WebKit ignores `break-after: avoid`, so a heading can end a page alone. A heading and the block

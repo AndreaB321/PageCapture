@@ -288,6 +288,73 @@ final class PDFExporterTests: XCTestCase {
         XCTAssertFalse(text.contains("INJECTED"))
     }
 
+    /// Prints `html` to an A4 PDF; every marker must be in its text and wholly inside the page's media box.
+    private func assertMarkersFitThePage(_ html: String, markers: [String], name: String,
+                                         file: StaticString = #filePath, line: UInt = #line) async throws {
+        let content = CapturedContent(
+            html: html, baseURL: URL(string: "pctest://main.test/docs/page.html")!, title: name,
+            stylesheets: [], imageURLs: [])
+        let url = folder.appendingPathComponent("\(name).pdf")
+        try await PDFExporter.write(content, localImages: [:], to: url,
+                                    configuration: Self.configuration(), paperSize: .a4)
+
+        let pdf = try XCTUnwrap(PDFDocument(url: url), file: file, line: line)
+        let text = try XCTUnwrap(pdf.string, file: file, line: line)
+        for marker in markers {
+            XCTAssertTrue(text.contains(marker), "\(marker) is missing from the PDF text", file: file, line: line)
+            guard let selection = pdf.findString(marker, withOptions: []).first,
+                  let page = selection.pages.first else {
+                XCTFail("\(marker) not found in the PDF", file: file, line: line)
+                continue
+            }
+            let box = page.bounds(for: .mediaBox)
+            let bounds = selection.bounds(for: page)
+            XCTAssertTrue(box.contains(bounds), "\(marker) at \(bounds) is outside the page \(box)", file: file, line: line)
+        }
+    }
+
+    /// A line of a code block much wider than the page wraps; none of its text is cut at the right margin.
+    func testWideCodeBlockWrapsInsteadOfBeingCut() async throws {
+        let words = (0..<40).map { "word\($0)" }.joined(separator: " ")
+        let html = """
+        <p>Intro</p>
+        <pre><code>short first line
+        const wide = "\(words) ENDMARKER"
+        last line</code></pre>
+        """
+        try await assertMarkersFitThePage(html, markers: ["short first line", "ENDMARKER", "last line"], name: "Code")
+    }
+
+    /// A table of many columns of long words lays out at the page width; every cell's text is visible.
+    func testWideTableFitsThePageWidth() async throws {
+        // Twelve columns share about 50 pt each: the marker is short enough to stay on one line in its cell.
+        let head = (0..<12).map { "<th>H\($0)</th>" }.joined()
+        let rows = (0..<3).map { row in
+            (0..<12).map { column in
+                column == 11 && row == 2 ? "<td>ZEND</td>" : "<td>Supercalifragilistic\(row)x\(column)expialidocious</td>"
+            }.joined()
+        }.map { "<tr>\($0)</tr>" }.joined()
+        let html = "<p>Intro</p><table border=\"1\"><tr>\(head)</tr>\(rows)</table>"
+        try await assertMarkersFitThePage(html, markers: ["H11", "ZEND"], name: "Table")
+    }
+
+    /// A page that forbids wrapping in its cells (`nowrap`) still prints whole: the text wraps in print.
+    func testTableOfNoWrapCellsFitsThePageWidth() async throws {
+        let cells = (0..<12).map { "<td>Unbreakable text \($0 == 11 ? "NWEND" : "N\($0)")</td>" }.joined()
+        let html = "<style>td { white-space: nowrap }</style><table border=\"1\"><tr>\(cells)</tr></table>"
+        try await assertMarkersFitThePage(html, markers: ["N0", "NWEND"], name: "NoWrap")
+    }
+
+    /// Fixed-width inline blocks do not shrink or wrap: a table of them is scaled down to the page, text in
+    /// its last column included.
+    func testTableOfFixedWidthBlocksIsScaledToThePageWidth() async throws {
+        let cells = (0..<6).map {
+            "<td><span style=\"display: inline-block; width: 300px\">\($0 == 5 ? "BLOCKEND" : "Cell\($0)")</span></td>"
+        }.joined()
+        let html = "<table border=\"1\"><tr>\(cells)</tr></table>"
+        try await assertMarkersFitThePage(html, markers: ["Cell0", "BLOCKEND"], name: "Blocks")
+    }
+
     func testBannerHeightIsKeptWhenItsHeadingIsAnchoredToTheBottom() async throws {
         let html = """
         <ul><li>First item</li><li>Last item of the list</li></ul>
