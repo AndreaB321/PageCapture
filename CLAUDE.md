@@ -32,7 +32,7 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
     MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (`(deny
     default)`: reads only the runtime, its work directory and system libraries, writes only in its
     work directory, no network, no child processes); no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
-- `Sources/PageCaptureOCRKit`: `PDFTextRecognizer`, Vision OCR (`.fast`, CPU only) of image-only PDFs to Markdown
+- `Sources/PageCaptureOCRKit`: `PDFTextRecognizer`, Vision OCR (`.fast`; the sandbox allows the GPU, not the Neural Engine) of image-only PDFs to Markdown
   (`hasTextLayer` tells scans apart); no callers in the app yet.
 - `Sources/PageCaptureOCR`: the `pagecapture-ocr` helper, run under `sandbox-exec`. Exit codes: 0 ok, 1 failed,
   2 usage, 3 unreadable, 4 no text. `--probe-*` flags exist in DEBUG builds only, for the sandbox tests.

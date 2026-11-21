@@ -111,9 +111,10 @@ public enum PDFTextRecognizer {
         return paragraphs(from: lines)
     }
 
-    /// Runs every stage of `request` on the CPU, to keep the GPU's IOKit user client out of the
-    /// OCR helper's sandbox. This only holds for `.fast`: on macOS 27 the `.accurate` detector runs
-    /// its model on the Neural Engine whatever is set here, and the sandbox denies that.
+    /// Asks for every stage of `request` on the CPU, so `.fast` stays off the Neural Engine, which
+    /// the OCR helper's sandbox denies (on macOS 27 the `.accurate` detector uses it whatever is
+    /// set here). Vision still opens the GPU's user client and finds no text without it, so the
+    /// sandbox allows that one.
     private static func useCPUOnly(_ request: VNRequest) throws {
         for (stage, devices) in try request.supportedComputeStageDevices {
             guard let cpu = devices.first(where: { if case .cpu = $0 { true } else { false } }) else { continue }

@@ -138,8 +138,10 @@ public struct DocumentConverter: Sendable {
     /// the helper has no main bundle and CoreImage crashes reading its defaults), the work
     /// directory (`WORK_DIR`), `/`, the system libraries and ICU's data (text recognition
     /// collates with it); writing in the work directory and to /dev/null; reading sysctls; and
-    /// opening IOSurfaces (Vision always draws into IOSurface-backed buffers). The GPU and the
-    /// Neural Engine stay denied, so OCR runs on the CPU. As for Python, there is no network, no
+    /// opening IOSurfaces (Vision always draws into IOSurface-backed buffers) and the GPU's user
+    /// client (on macOS 27 Vision recognises no text at all without it, even in `.fast` mode with
+    /// every stage set to the CPU). The Neural Engine stays denied, which is why OCR uses `.fast`.
+    /// As for Python, there is no network, no
     /// child process, no Mach service and no file of the user's, and the paths come in as
     /// parameters.
     static let ocrSandboxProfile = """
@@ -152,6 +154,7 @@ public struct DocumentConverter: Sendable {
         (allow file-write* (subpath (param "WORK_DIR")) (literal "/dev/null"))
         (allow sysctl-read)
         (allow iokit-open-user-client (iokit-user-client-class "IOSurfaceRootUserClient"))
+        (allow iokit-open-user-client (iokit-user-client-class "AGXDeviceUserClient"))
         (allow file-read* (subpath "/usr/share/icu"))
         """
 
