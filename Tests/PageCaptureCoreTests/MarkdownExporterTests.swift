@@ -6,8 +6,8 @@ import XCTest
 /// each supported element, and compares with `Fixtures/markdown.md`.
 @MainActor
 final class MarkdownExporterTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         _ = NSApplication.shared
     }
 

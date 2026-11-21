@@ -9,14 +9,16 @@ import XCTest
 final class PDFExporterTests: XCTestCase {
     private var folder: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
+        try await super.setUp()
         _ = NSApplication.shared
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("PDFExporterTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: folder)
+        try await super.tearDown()
     }
 
     static func configuration() -> WKWebViewConfiguration {

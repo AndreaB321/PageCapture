@@ -8,14 +8,16 @@ import XCTest
 final class CaptureExporterTests: XCTestCase {
     private var parent: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
+        try await super.setUp()
         _ = NSApplication.shared
         parent = FileManager.default.temporaryDirectory.appendingPathComponent("CaptureExporterTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: parent)
+        try await super.tearDown()
     }
 
     func testExportsBothFormatsWithImagesIntoNamedFolder() async throws {
