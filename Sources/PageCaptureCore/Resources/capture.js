@@ -493,9 +493,64 @@
     for (const d of root.querySelectorAll('details[open]')) d.setAttribute(EXPANDED, '');
   }
 
+  // Waiting for a panel whose content arrives after it is shown (see clickAndWait()).
+  const PANEL_POLL = 50;
+  // A panel that changed less than this long ago is still taking its content.
+  const PANEL_QUIET = 200;
+  const CLICK_MICROTASKS = 3;
+  const LOADING = '[aria-busy="true"], [role="progressbar"], progress';
+  const LOADING_CLASS_HINT = '[class*="spinner" i], [class*="loader" i], [class*="loading" i], [class*="skeleton" i]';
+  const LOADING_CLASS = /^([\w-]*[-_])?(spinner|loader|loading|skeleton)([-_][\w-]*)?$/i;
+  const NOT_LOADING_TAGS = new Set(['img', 'picture', 'video', 'audio']);
+  const PANEL_CONTENT = 'img, picture, video, audio, iframe, svg, canvas, object, embed';
+
+  // No text and nothing to see, in a panel the page has not hidden.
+  function isEmptyPanel(p) {
+    return !p.textContent.trim() && !p.querySelector(PANEL_CONTENT) && getComputedStyle(p).display !== 'none';
+  }
+
+  // The panel is busy, or shows a progress bar or a spinner/loader/skeleton (by class) inside it.
+  function isLoadingPanel(p) {
+    if (p.getAttribute('aria-busy') === 'true') return true;
+    if (Array.from(p.querySelectorAll(LOADING)).some(isShown)) return true;
+    return Array.from(p.querySelectorAll(LOADING_CLASS_HINT)).some((el) => !NOT_LOADING_TAGS.has(el.localName) &&
+      Array.from(el.classList).some((c) => LOADING_CLASS.test(c)) && isShown(el));
+  }
+
+  // Clicks `control`, then waits while the content of the `panels` it shows still seems to be on its
+  // way: a panel is empty (only when `named`: the control names its panels, so they are not a
+  // guess), or shows a loading indicator, or changed less than PANEL_QUIET ms ago. What the page
+  // does in the click itself (synchronously or in microtasks) does not count as a change, so a panel
+  // that is filled at once adds no wait. Waits at least `o.expandDelay`, at most `o.panelTimeout`.
+  async function clickAndWait(control, panels, named, o) {
+    const start = performance.now();
+    const watched = panels.filter((p) => p && p.isConnected);
+    let changed = -Infinity;
+    const observer = new MutationObserver(() => { changed = performance.now(); });
+    for (const p of watched) observer.observe(p, { childList: true, subtree: true, characterData: true });
+    try {
+      control.click();
+      // Lets the click's own microtasks, and the observer's report of what they changed, run first.
+      // Not a timer: a timer can be held back for a second or more in a window macOS throttles.
+      for (let i = 0; i < CLICK_MICROTASKS; i++) await null;
+      changed = -Infinity;
+      await pause(o.expandDelay);
+      for (;;) {
+        if (collector.stopRequested) return;
+        const now = performance.now();
+        const arriving = now - changed < PANEL_QUIET || watched.some((p) => p.isConnected &&
+          ((named && isEmptyPanel(p)) || isLoadingPanel(p)));
+        if (!arriving || now >= start + o.panelTimeout) return;
+        await pause(Math.min(PANEL_POLL, start + o.panelTimeout - now));
+      }
+    } finally {
+      observer.disconnect();
+    }
+  }
+
   // Opens collapsed content in the target: closed <details>, and triggers with aria-expanded="false"
   // (each clicked at most once per capture and never once seen open, at most `maxExpandClicks` per pass). Snapshots after each
-  // click, as opening one panel of an exclusive accordion may remove another's content. Then shows
+  // click, once the panel's content has arrived (see clickAndWait()), as opening one panel of an exclusive accordion may remove another's content. Then shows
   // each tab panel in turn (see activateTabs()). Keeps the scroll position. Returns the number of clicks.
   async function expand(root, scroller, take, state, o) {
     const top = scroller.scrollTop;
@@ -519,9 +574,8 @@
         if (collector.stopRequested || clicks >= o.maxExpandClicks) break;
         if (!e.trigger.isConnected || e.trigger.getAttribute('aria-expanded') !== 'false') continue;
         state.clicked.add(e.trigger);
-        e.trigger.click();
         clicks++;
-        await pause(o.expandDelay);
+        await clickAndWait(e.trigger, e.panels, e.controlled, o);
         observe(root, entries, state);
         take();
       }
@@ -799,8 +853,8 @@
   }
 
   // Selects each unselected tab in the target once per capture (at most `budget` clicks), snapshotting
-  // after each, as a panel may only get its content when shown; then selects the tab that was
-  // selected before again. Returns the number of clicks.
+  // after each once its panel's content has arrived (see clickAndWait()), as a panel may only get its
+  // content when shown; then selects the tab that was selected before again. Returns the number of clicks.
   async function activateTabs(root, take, state, o, budget) {
     let clicks = 0;
     for (const g of markTabs(root)) {
@@ -814,10 +868,9 @@
         if (collector.stopRequested || clicks >= budget) break;
         if (!t.tab.isConnected) continue;
         state.clickedTabs.add(t.tab);
-        t.tab.click();
         clicks++;
         clicked = true;
-        await pause(o.expandDelay);
+        await clickAndWait(t.tab, [t.panel], true, o);
         markTabs(root);
         take();
       }
@@ -1399,7 +1452,7 @@
   async function capture(options) {
     const o = Object.assign({
       wholePage: false, stepRatio: 0.8, settleDelay: 300, stallDelay: 800, imageTimeout: 2000, stallLimit: 3,
-      expandDelay: 50, maxExpandClicks: 50, revealTimeout: 3000,
+      expandDelay: 50, maxExpandClicks: 50, revealTimeout: 3000, panelTimeout: 5000,
     }, options || {});
 
     let root, scroller;

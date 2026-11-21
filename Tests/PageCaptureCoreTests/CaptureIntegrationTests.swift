@@ -25,6 +25,7 @@ final class CaptureIntegrationTests: XCTestCase {
         timing.settleDelay = 150
         timing.stallDelay = 300
         timing.imageTimeout = 500
+        timing.panelLoadTimeout = 1500
         return timing
     }
 
@@ -307,6 +308,39 @@ final class CaptureIntegrationTests: XCTestCase {
             "Labelled Tab One", "Labelled panel one text.", "Labelled Tab Two", "Labelled panel two text.",
         ])
         XCTAssertFalse(text.contains("Elsewhere"), text)
+    }
+
+    // MARK: Panels that load late
+
+    /// The capture of `Fixtures/slow-panels.html`, shared by its tests.
+    private static var slowPanelsCapture: CapturedContent?
+
+    private func captureSlowPanels() async throws -> CapturedContent {
+        if let content = Self.slowPanelsCapture { return content }
+        let harness = try await makeHarness(page: "slow-panels.html")
+        defer { harness.window.close() }
+        let content = try await harness.bridge.collect(.wholePage, timing: Self.fast)
+        Self.slowPanelsCapture = content
+        return content
+    }
+
+    func testWaitsForTabPanelContentThatLoadsAfterTheTabIsSelected() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [
+            #"id="sp1""#, "Ready tab panel text.",
+            #"id="sp2""#, #"data-pc-tab-title="Fetched Tab""#, "Zulu late tab text.",
+            "Slow sections",
+        ])
+        XCTAssertFalse(content.html.contains("Loading tab"), "the panel is collected once loaded: \(content.html)")
+    }
+
+    func testWaitsForSectionContentThatLoadsAfterTheSectionIsOpened() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [
+            #"id="sap1""#, "Yankee late section text.",
+            "Fetched Section Two", #"id="sap2""#, "Xray late section text.",
+            "Next section",
+        ])
     }
 
     // MARK: Hidden content

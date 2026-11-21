@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Slow Panels</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+</style>
+</head>
+<body>
+<h1>Course page</h1>
+
+<!-- Content fetched after a tab is selected or a section opened, and inserted LOAD_DELAY ms later.
+     Only the selected tab and the open section hold content (React style): a response that arrives
+     after its tab was deselected or its section closed is dropped. -->
+<script>const LOAD_DELAY = 600;</script>
+
+<!-- (a) Tabs: the second panel shows a busy spinner until its content arrives. -->
+<h2>Slow tabs</h2>
+<div role="tablist">
+  <button id="st1" role="tab" aria-controls="sp1" aria-selected="true">Ready Tab</button>
+  <button id="st2" role="tab" aria-controls="sp2" aria-selected="false">Fetched Tab</button>
+</div>
+<div id="sp1" role="tabpanel"><p>Ready tab panel text.</p></div>
+<div id="sp2" role="tabpanel" hidden></div>
+
+<!-- (b) Exclusive accordion: an opened section stays empty until its content arrives. -->
+<h2>Slow sections</h2>
+<section id="slow-acc">
+  <button id="sa1" aria-expanded="false" aria-controls="sap1">Fetched Section One</button>
+  <div id="sap1" role="region" hidden></div>
+  <button id="sa2" aria-expanded="false" aria-controls="sap2">Fetched Section Two</button>
+  <div id="sap2" role="region" hidden></div>
+</section>
+
+<h2 id="next">Next section</h2>
+<p>After the slow panels.</p>
+
+<script>
+  const tabContent = { sp1: '<p>Ready tab panel text.</p>', sp2: '<p>Zulu late tab text.</p>' };
+  const tabs = document.querySelectorAll('[role="tab"]');
+  for (const t of tabs) {
+    t.addEventListener('click', () => {
+      for (const o of tabs) {
+        const on = o === t;
+        const panel = document.getElementById(o.getAttribute('aria-controls'));
+        o.setAttribute('aria-selected', String(on));
+        panel.hidden = !on;
+        panel.removeAttribute('aria-busy');
+        panel.innerHTML = '';
+      }
+      const panel = document.getElementById(t.getAttribute('aria-controls'));
+      if (panel.id === 'sp1') { panel.innerHTML = tabContent.sp1; return; }
+      panel.setAttribute('aria-busy', 'true');
+      panel.innerHTML = '<div class="spinner">Loading tab…</div>';
+      setTimeout(() => {
+        if (t.getAttribute('aria-selected') !== 'true') return;
+        panel.removeAttribute('aria-busy');
+        panel.innerHTML = tabContent[panel.id];
+      }, LOAD_DELAY);
+    });
+  }
+
+  const sectionContent = { sap1: '<p>Yankee late section text.</p>', sap2: '<p>Xray late section text.</p>' };
+  const sections = document.querySelectorAll('#slow-acc button');
+  for (const b of sections) {
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      for (const o of sections) {
+        const on = o === b && open;
+        const panel = document.getElementById(o.getAttribute('aria-controls'));
+        o.setAttribute('aria-expanded', String(on));
+        panel.hidden = !on;
+        panel.innerHTML = '';
+      }
+      if (!open) return;
+      setTimeout(() => {
+        if (b.getAttribute('aria-expanded') !== 'true') return;
+        document.getElementById(b.getAttribute('aria-controls')).innerHTML = sectionContent[b.getAttribute('aria-controls')];
+      }, LOAD_DELAY);
+    });
+  }
+</script>
+</body>
+</html>
