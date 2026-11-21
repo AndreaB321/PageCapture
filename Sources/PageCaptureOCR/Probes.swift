@@ -6,8 +6,27 @@ import Foundation
 /// - `--probe-read <path>`: reads the file; prints `allowed` or the errno name (e.g. `EPERM`).
 /// - `--probe-net <port>`: connects to 127.0.0.1:<port> over TCP; prints `allowed` or the errno name.
 /// - `--probe-sleep <seconds>`: sleeps, then prints `slept`.
+/// - `--probe-exec`: runs `/usr/bin/true` with `posix_spawn` and waits for it; prints `allowed` or the errno name.
+/// - `--probe-fork`: forks a child that exits at once and waits for it; prints `allowed` or the errno name.
 func runProbe(_ probe: String, _ arguments: [String]) -> Never {
     switch (probe, arguments.count) {
+    case ("--probe-exec", 0):
+        var child: pid_t = 0
+        let spawned = posix_spawn(&child, "/usr/bin/true", nil, nil, [strdup("true"), nil], nil)
+        guard spawned == 0 else { report(spawned) }
+        var status: Int32 = 0
+        waitpid(child, &status, 0)
+        report(0)
+    case ("--probe-fork", 0):
+        // Swift marks `fork()` unavailable; the child only calls `_exit`.
+        typealias Fork = @convention(c) () -> pid_t
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "fork") else { break } // RTLD_DEFAULT
+        let child = unsafeBitCast(symbol, to: Fork.self)()
+        if child == 0 { _exit(0) }
+        guard child > 0 else { report(errno) }
+        var status: Int32 = 0
+        waitpid(child, &status, 0)
+        report(0)
     case ("--probe-read", 1):
         let descriptor = open(arguments[0], O_RDONLY)
         var byte: UInt8 = 0

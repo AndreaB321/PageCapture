@@ -34,8 +34,9 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
     work directory, no network, no child processes); runs the `pagecapture-ocr` helper, under its
     own profile, on PDFs without text; no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
 - `Sources/PageCaptureOCRKit`: `PDFTextRecognizer`, Vision OCR (`.fast`; the sandbox allows the GPU,
-  not the Neural Engine) of image-only PDFs to Markdown (`hasTextLayer` tells scans apart). Used by
-  the `pagecapture-ocr` helper, which `DocumentConverter` runs under its own sandbox profile.
+  not the Neural Engine) of image-only PDFs to Markdown, rendered with CoreGraphics, never PDFKit.
+  Used by the `pagecapture-ocr` helper, which `DocumentConverter` runs under its own sandbox
+  profile on PDFs that MarkItDown finds no text in.
 - `Sources/PageCaptureOCR`: the `pagecapture-ocr` helper, run under `sandbox-exec`. Exit codes: 0 ok, 1 failed,
   2 usage, 3 unreadable, 4 no text. `--probe-*` flags exist in DEBUG builds only, for the sandbox tests.
 - `Sources/PageCaptureUI`: windows and views; `CaptureController` performs the state machine's effects.

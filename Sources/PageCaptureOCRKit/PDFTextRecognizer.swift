@@ -1,36 +1,24 @@
 import CoreGraphics
 import CoreML
 import Foundation
-import PDFKit
 import Vision
 
 public enum PDFTextRecognizerError: Error, Equatable {
-    /// PDFKit cannot open the file, or it is locked with a password.
+    /// CoreGraphics cannot open the file, it is locked with a password, or it has no pages.
     case unreadable
     /// OCR found no text on any page.
     case noText
 }
 
 /// Reads the text of an image-only (scanned) PDF with Apple's on-device Vision OCR and returns Markdown.
-/// Recognition uses `.fast`: it runs on the CPU alone, so the sandboxed helper needs neither the GPU nor the
-/// Neural Engine. It is less precise than `.accurate` on hard scans and supports fewer languages (the
-/// European ones are fine).
+/// Recognition uses `.fast`, because the sandboxed helper has no Neural Engine. It still needs the GPU:
+/// the helper's sandbox allows the GPU's user client (`AGXDeviceUserClient`), without which Vision finds
+/// no text at all, even in `.fast` mode. `.fast` is less precise than `.accurate` on hard scans and
+/// supports fewer languages (the European ones are fine).
 public enum PDFTextRecognizer {
     /// Longest side of a rendered page, in pixels (bounds memory).
     static let maxPixelSide: CGFloat = 4000
     static let renderDPI: CGFloat = 300
-
-    /// True when any page carries a text layer with non-whitespace characters.
-    public static func hasTextLayer(_ url: URL) -> Bool {
-        guard let document = PDFDocument(url: url), !document.isLocked else { return false }
-        for index in 0..<document.pageCount {
-            let hasText = autoreleasepool {
-                document.page(at: index)?.string?.contains { !$0.isWhitespace } ?? false
-            }
-            if hasText { return true }
-        }
-        return false
-    }
 
     /// OCRs up to `maxPages` pages, in order. With more than one page each starts with `<!-- page N -->`;
     /// when pages were left out, the Markdown ends with `<!-- stopped after N of M pages -->`.

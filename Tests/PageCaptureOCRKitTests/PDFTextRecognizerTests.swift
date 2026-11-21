@@ -58,19 +58,6 @@ import Testing
         return url
     }
 
-    static func textPDF(_ text: String) -> URL {
-        let url = tempURL()
-        var box = CGRect(origin: .zero, size: pageSize)
-        let context = CGContext(url as CFURL, mediaBox: &box, nil)!
-        context.beginPDFPage(nil)
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font]))
-        context.textPosition = CGPoint(x: 50, y: 700)
-        CTLineDraw(line, context)
-        context.endPDFPage()
-        context.closePDF()
-        return url
-    }
-
     static func blankPDF() -> URL { scannedPDF([[]]) }
 
     static func normalised(_ text: String) -> String {
@@ -135,17 +122,6 @@ import Testing
         #expect(PDFTextRecognizer.escapeLineStart("<div>") == "\\<div>")
         #expect(PDFTextRecognizer.escapeLineStart("| a | b |") == "\\| a | b |")
         #expect(PDFTextRecognizer.escapeLineStart("a ``` b") == "a ``` b")
-    }
-
-    @Test func detectsTextLayer() {
-        let scanned = Self.scannedPDF([[Block(lines: ["Scanned only"], top: 100)]])
-        let text = Self.textPDF("Real text layer")
-        defer {
-            try? FileManager.default.removeItem(at: scanned)
-            try? FileManager.default.removeItem(at: text)
-        }
-        #expect(!PDFTextRecognizer.hasTextLayer(scanned))
-        #expect(PDFTextRecognizer.hasTextLayer(text))
     }
 
     @Test func unreadableAndBlank() async throws {

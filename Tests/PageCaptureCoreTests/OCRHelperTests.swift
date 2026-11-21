@@ -41,6 +41,15 @@ final class OCRHelperTests: XCTestCase {
         }
     }
 
+    /// Skips the test if the helper was built without DEBUG: it then takes a `--probe-…` argument
+    /// for a file name and exits 2 with its usage message.
+    private func requireProbes() throws {
+        let (status, _, errors) = try Self.runUnsandboxed(helper, ["--probe-sleep", "0"])
+        if status == 2, errors.contains("usage:") {
+            throw XCTSkip("pagecapture-ocr was built without DEBUG, so it has no --probe-… arguments")
+        }
+    }
+
     // MARK: - Scanned PDFs
 
     /// MarkItDown finds no text, so the helper runs, in a sandboxed process of its own: not OCR
@@ -86,6 +95,80 @@ final class OCRHelperTests: XCTestCase {
         }
     }
 
+    /// MarkItDown reads a PDF without pages as empty; the helper cannot read it (exit status 3).
+    func testPDFTheHelperCannotReadIsUnreadable() async throws {
+        try requireRuntime()
+        let empty = folder.appendingPathComponent("empty.pdf")
+        // CoreGraphics writes a blank page into a PDF closed without any: write one by hand.
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for object in ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"] {
+            offsets.append(pdf.utf8.count)
+            pdf += "\(offsets.count) 0 obj\n\(object)\nendobj\n"
+        }
+        let xref = pdf.utf8.count
+        pdf += "xref\n0 3\n0000000000 65535 f \n"
+        pdf += offsets.map { String(format: "%010d 00000 n \n", $0) }.joined()
+        pdf += "trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n\(xref)\n%%EOF\n"
+        try Data(pdf.utf8).write(to: empty)
+
+        do {
+            let markdown = try await converter.markdown(forFile: empty)
+            XCTFail("Read a PDF without pages: \(markdown)")
+        } catch let error as DocumentConversionError {
+            XCTAssertEqual(error, .unreadable)
+        }
+    }
+
+    /// A helper ended by a signal has no exit status: SIGQUIT (3) is not exit status 3, unreadable.
+    func testHelperEndedBySignalIsReportedAsStopped() async throws {
+        try requireRuntime()
+        try requireProbes()
+        let scan = folder.appendingPathComponent("blank.pdf")
+        try DocumentConverterTests.writeScannedPDF(line: "", to: scan)
+        converter.ocrArguments = { _ in ["--probe-sleep", "30"] }
+        let launches = OSAllocatedUnfairLock(initialState: 0)
+        let helperLaunch = OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>(initialState: nil)
+        converter.onLaunch = { pid, directory in
+            // Python first, then the helper.
+            if launches.withLock({ $0 += 1; return $0 }) == 2 { helperLaunch.withLock { $0 = (pid, directory) } }
+        }
+        let converter = converter!
+        let task = Task { try await converter.markdown(forFile: scan) }
+        let (pid, _) = try await DocumentConverterTests.waitForLaunch(helperLaunch)
+
+        Darwin.kill(pid, SIGQUIT)
+
+        do {
+            let markdown = try await task.value
+            XCTFail("Not stopped: \(markdown)")
+        } catch let error as DocumentConversionError {
+            XCTAssertEqual(error, .stopped(signal: SIGQUIT, message: "Stopped by signal \(SIGQUIT)"))
+        }
+    }
+
+    /// `sandbox-exec` names the helper when it cannot run it; the message must not.
+    func testHelperThatCannotRunIsReportedWithoutItsPath() async throws {
+        try requireRuntime()
+        let helpers = folder.appendingPathComponent("HelperDirectory-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+        let fake = helpers.appendingPathComponent("pagecapture-ocr")
+        try Data("not a program\n".utf8).write(to: fake)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        converter.ocrHelperURL = fake
+        let scan = folder.appendingPathComponent("blank.pdf")
+        try DocumentConverterTests.writeScannedPDF(line: "", to: scan)
+
+        do {
+            let markdown = try await converter.markdown(forFile: scan)
+            XCTFail("Ran a helper that is not a program: \(markdown)")
+        } catch let DocumentConversionError.failed(_, message) {
+            XCTAssertTrue(message.contains("<helpers>/pagecapture-ocr"), message)
+            XCTAssertFalse(message.contains(helpers.lastPathComponent), message)
+            XCTAssertFalse(message.contains("/Users/"), message)
+        }
+    }
+
     /// Run directly, outside any sandbox: a file that is not a PDF is reported as unreadable, and
     /// the message does not name its path.
     func testHelperReportsAFileThatIsNotAPDFAsUnreadable() throws {
@@ -102,6 +185,7 @@ final class OCRHelperTests: XCTestCase {
     // MARK: - Sandbox
 
     func testSandboxDeniesReadingOutsideItsTrees() async throws {
+        try requireProbes()
         let secret = folder.appendingPathComponent("secret.txt")
         try "secret".write(to: secret, atomically: true, encoding: .utf8)
         let realSecret = try XCTUnwrap(realpath(secret.path, nil).map { pointer in
@@ -118,6 +202,7 @@ final class OCRHelperTests: XCTestCase {
     }
 
     func testSandboxDeniesTheNetwork() async throws {
+        try requireProbes()
         let listener = try Self.listenOnLoopback()
         defer { close(listener.descriptor) }
         // Outside the sandbox, the helper reaches the listener.
@@ -130,9 +215,27 @@ final class OCRHelperTests: XCTestCase {
         XCTAssertEqual(sandboxed.output, "EPERM\n")
     }
 
+    func testSandboxDeniesStartingProcesses() async throws {
+        try requireProbes()
+        // Outside the sandbox, the helper can.
+        for probe in ["--probe-fork", "--probe-exec"] {
+            let (_, unsandboxed, _) = try Self.runUnsandboxed(helper, [probe])
+            XCTAssertEqual(unsandboxed, "allowed\n", probe)
+        }
+
+        let fork = try await converter.runOCRHelper(arguments: ["--probe-fork"])
+        let exec = try await converter.runOCRHelper(arguments: ["--probe-exec"])
+
+        XCTAssertEqual(fork.status, 0)
+        XCTAssertEqual(fork.output, "EPERM\n")
+        XCTAssertEqual(exec.status, 0)
+        XCTAssertEqual(exec.output, "EPERM\n")
+    }
+
     // MARK: - Stopping
 
     func testTimeoutStopsTheHelper() async throws {
+        try requireProbes()
         converter.ocrTimeout = .seconds(1)
         let launch = OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>(initialState: nil)
         converter.onLaunch = { pid, directory in launch.withLock { $0 = (pid, directory) } }
@@ -151,6 +254,7 @@ final class OCRHelperTests: XCTestCase {
     }
 
     func testStopAllRunningStopsTheHelper() async throws {
+        try requireProbes()
         let launch = OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>(initialState: nil)
         converter.onLaunch = { pid, directory in launch.withLock { $0 = (pid, directory) } }
         let converter = converter!

@@ -27,7 +27,13 @@ final class DocumentConverterTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        if let folder { try? FileManager.default.removeItem(at: folder) }
+        guard let folder else { return }
+        // Tests lock files (`uchg`), which would keep the folder from being deleted.
+        lchflags(folder.path, 0)
+        for case let path as String in FileManager.default.enumerator(atPath: folder.path) ?? NSEnumerator() {
+            lchflags(folder.appendingPathComponent(path).path, 0)
+        }
+        try? FileManager.default.removeItem(at: folder)
     }
 
     // MARK: - Converting
@@ -127,6 +133,74 @@ final class DocumentConverterTests: XCTestCase {
             let markdown = try await converter.markdown(forFile: documents.appendingPathComponent("page.html"))
             XCTFail("Accepted a file over the cap: \(markdown)")
         } catch DocumentConversionError.inputTooLarge {}
+    }
+
+    /// The copy stops at the cap by itself, not only the size check before it (the file may grow
+    /// in between): a file of exactly `maxInputBytes` converts, one byte more does not.
+    func testCopyStopsOneByteOverTheCap() async throws {
+        let page = documents.appendingPathComponent("page.html")
+        let size = try XCTUnwrap(page.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        let root = folder.appendingPathComponent("work", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        converter.temporaryRoot = root
+
+        converter.maxInputBytes = size
+        let markdown = try await converter.markdown(forFile: page)
+        XCTAssertTrue(markdown.contains("# Harbour Report"), markdown)
+
+        converter.maxInputBytes = size - 1
+        do {
+            let markdown = try await converter.markdown(forFile: page)
+            XCTFail("Accepted a file one byte over the cap: \(markdown)")
+        } catch DocumentConversionError.inputTooLarge {}
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
+    }
+
+    /// A file locked in the Finder (`uchg`) converts, its copy is a plain file the work directory
+    /// can be deleted with, and no copy of it is left behind.
+    func testLockedInputLeavesNoCopyBehind() async throws {
+        let locked = folder.appendingPathComponent("Locked.html")
+        try FileManager.default.copyItem(at: documents.appendingPathComponent("page.html"), to: locked)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: locked.path)
+        let root = folder.appendingPathComponent("work", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        converter.temporaryRoot = root
+        let copy = OSAllocatedUnfairLock<(flags: UInt32, mode: UInt16)?>(initialState: nil)
+        converter.onLaunch = { _, directory in
+            var info = stat()
+            guard lstat(directory.appendingPathComponent("input.html").path, &info) == 0 else { return }
+            let found = (flags: info.st_flags, mode: info.st_mode & 0o7777)
+            copy.withLock { $0 = found }
+        }
+
+        let markdown = try await converter.markdown(forFile: locked)
+
+        XCTAssertTrue(markdown.contains("# Harbour Report"), markdown)
+        let (flags, mode) = try XCTUnwrap(copy.withLock { $0 }, "No copy in the work directory")
+        XCTAssertEqual(flags, 0, "The copy kept the original's flags")
+        XCTAssertEqual(mode, 0o600)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
+    }
+
+    /// What runs in the work directory can lock what it wrote there; the directory is deleted anyway.
+    func testWorkDirectoryIsDeletedEvenWithLockedFilesInIt() async throws {
+        let root = folder.appendingPathComponent("work", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        converter.temporaryRoot = root
+
+        let output = try await converter.runScript("""
+            import os, stat
+            os.makedirs("inner")
+            for path in ["top.txt", "inner/deep.txt"]:
+                with open(path, "w") as file:
+                    file.write("x")
+            for path in ["top.txt", "inner/deep.txt", "inner"]:
+                os.chflags(path, stat.UF_IMMUTABLE)
+            print(os.stat("top.txt").st_flags & stat.UF_IMMUTABLE != 0)
+            """)
+
+        XCTAssertEqual(output, "True\n", "The script could not lock its files")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
     }
 
     func testUnreadableInputIsReportedWithoutItsPath() async throws {
@@ -239,8 +313,8 @@ final class DocumentConverterTests: XCTestCase {
         do {
             let output = try await task.value
             XCTFail("Not stopped: \(output)")
-        } catch let DocumentConversionError.failed(status, _) {
-            XCTAssertEqual(status, SIGTERM)
+        } catch let error as DocumentConversionError {
+            XCTAssertEqual(error, .stopped(signal: SIGTERM, message: "Stopped by signal \(SIGTERM)"))
         }
 
         try await Self.assertGroupGone(pid)
@@ -397,7 +471,7 @@ final class DocumentConverterTests: XCTestCase {
 
         XCTAssertEqual(output.split(separator: "\n"), [
             "1 True",
-            "HOME LANG PATH PYTHONDONTWRITEBYTECODE PYTHONIOENCODING TMPDIR",
+            "HOME LANG PATH TMPDIR",
         ], output)
     }
 
