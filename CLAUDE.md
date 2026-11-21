@@ -12,6 +12,7 @@ scrolling webpage, or one frame or scrolling area of it, and saves it as HTML, P
 | Full suite | `swift test` | ~70 s |
 | One suite | `swift test --filter MarkdownExporterTests` | seconds |
 | Bundled tools (ffmpeg built from source, yt-dlp, Deno) | `scripts/fetch-tools.sh` | slow the first time |
+| MarkItDown runtime only (Python + MarkItDown, no ffmpeg; needs `zstd`, `brew install zstd`) | `scripts/fetch-tools.sh markitdown` | ~1 min the first time, then a no-op |
 | App and DMG | `scripts/make-dmg.sh` | runs fetch-tools first |
 
 Without `build/tools`, `ToolsTests` and `VideoDownloaderTests` are skipped (29 tests): a green run
@@ -27,6 +28,8 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
   - `CaptureExporter`: the save pipeline; `HTMLExporter`, `PDFExporter`, `MarkdownExporter` render
     with `document.js`, `markdown.js` and `chrome.js` in an off-screen web view.
   - `VideoDownloader`, `Tools`: external processes (ffmpeg, yt-dlp, Deno).
+  - MarkItDown (pinned Python + MarkItDown, `Contents/Resources/markitdown`) is bundled for converting
+    documents to Markdown; no Swift code uses it yet.
 - `Sources/PageCaptureUI`: windows and views; `CaptureController` performs the state machine's effects.
 - `Sources/PageCapture`: the app entry point. `Sources/ManualShots`: manual screenshots, not shipped.
 
@@ -45,4 +48,5 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
 - Known limits are listed in README "Tips and limits"; remove an entry when it is fixed.
 - The app version is `APP_VERSION` in `scripts/build-app.sh`; `make-source-bundle.sh` reads it from there.
 - Tool versions and checksums are pinned in `scripts/tool-pins.sh`.
+- Python trees in a signed .app go in Contents/Resources with precompiled unchecked-hash bytecode, never in Contents/Helpers.
 - DRM-protected media is never worked around (SPEC "Videos").
