@@ -27,6 +27,7 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
   - `Resources/capture.js`: picker and collector, run in every frame. Large: read it by function.
   - `CaptureExporter`: the save pipeline; `HTMLExporter`, `PDFExporter`, `MarkdownExporter` render
     with `document.js`, `markdown.js` and `chrome.js` in an off-screen web view.
+  - `PDFTextRecognizer`: Vision OCR of image-only PDFs to Markdown (`hasTextLayer` tells scans apart); no callers yet.
   - `VideoDownloader`, `Tools`: external processes (ffmpeg, yt-dlp, Deno).
   - `DocumentConverter`: one local file to Markdown with the bundled MarkItDown (pinned Python +
     MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (no network,

@@ -1,0 +1,143 @@
+import CoreGraphics
+import Foundation
+import PDFKit
+import Vision
+
+public enum PDFTextRecognizerError: Error, Equatable {
+    /// PDFKit cannot open the file, or it is locked with a password.
+    case unreadable
+    /// OCR found no text on any page.
+    case noText
+}
+
+/// Reads the text of an image-only (scanned) PDF with Apple's on-device Vision OCR and returns Markdown.
+public enum PDFTextRecognizer {
+    /// Longest side of a rendered page, in pixels (bounds memory).
+    static let maxPixelSide: CGFloat = 4000
+    static let renderDPI: CGFloat = 300
+
+    /// True when any page carries a text layer with non-whitespace characters.
+    public static func hasTextLayer(_ url: URL) -> Bool {
+        guard let document = PDFDocument(url: url), !document.isLocked else { return false }
+        for index in 0..<document.pageCount {
+            let hasText = autoreleasepool {
+                document.page(at: index)?.string?.contains { !$0.isWhitespace } ?? false
+            }
+            if hasText { return true }
+        }
+        return false
+    }
+
+    /// OCRs up to `maxPages` pages, in order. With more than one page each starts with `<!-- page N -->`.
+    public static func markdown(fromPDF url: URL, maxPages: Int = 300) async throws -> String {
+        guard let document = PDFDocument(url: url), !document.isLocked, document.pageCount > 0 else {
+            throw PDFTextRecognizerError.unreadable
+        }
+        let count = min(document.pageCount, max(maxPages, 0))
+        let labelled = document.pageCount > 1
+        var pages: [String] = []
+        var recognisedAny = false
+        for index in 0..<count {
+            if Task.isCancelled { throw CancellationError() }
+            let text: String = try autoreleasepool {
+                guard let page = document.page(at: index), let image = render(page) else { return "" }
+                return try recognise(image)
+            }
+            if !text.isEmpty { recognisedAny = true }
+            pages.append(labelled ? "<!-- page \(index + 1) -->\n\n\(text)" : text)
+        }
+        guard recognisedAny else { throw PDFTextRecognizerError.noText }
+        return pages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n") + "\n"
+    }
+
+    // MARK: Rendering
+
+    private static func render(_ page: PDFPage) -> CGImage? {
+        let box = page.bounds(for: .cropBox)
+        let rotated = page.rotation % 180 != 0
+        let pointSize = rotated ? CGSize(width: box.height, height: box.width) : box.size
+        guard pointSize.width > 0, pointSize.height > 0 else { return nil }
+        let scale = min(renderDPI / 72, maxPixelSide / max(pointSize.width, pointSize.height))
+        let width = max(Int((pointSize.width * scale).rounded()), 1)
+        let height = max(Int((pointSize.height * scale).rounded()), 1)
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return nil }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.interpolationQuality = .high
+        context.scaleBy(x: CGFloat(width) / pointSize.width, y: CGFloat(height) / pointSize.height)
+        page.draw(with: .cropBox, to: context)
+        return context.makeImage()
+    }
+
+    // MARK: Recognition
+
+    private struct Line {
+        var text: String
+        var box: CGRect  // normalised, origin bottom left
+    }
+
+    private static func recognise(_ image: CGImage) throws -> String {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.automaticallyDetectsLanguage = true
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let lines = (request.results ?? []).compactMap { observation -> Line? in
+            guard let text = observation.topCandidates(1).first?.string,
+                !text.trimmingCharacters(in: .whitespaces).isEmpty
+            else { return nil }
+            return Line(text: text, box: observation.boundingBox)
+        }
+        return paragraphs(from: lines)
+    }
+
+    /// Orders lines top to bottom then left to right, and starts a new paragraph at a vertical gap
+    /// larger than 1.5 times the median line height.
+    private static func paragraphs(from lines: [Line]) -> String {
+        guard !lines.isEmpty else { return "" }
+        let heights = lines.map(\.box.height).sorted()
+        let median = heights[heights.count / 2]
+        // Group into rows: boxes whose vertical centres are within half a median height share a row.
+        var rows: [[Line]] = []
+        for line in lines.sorted(by: { $0.box.midY > $1.box.midY }) {
+            if let first = rows.last?.first, abs(first.box.midY - line.box.midY) < median / 2 {
+                rows[rows.count - 1].append(line)
+            } else {
+                rows.append([line])
+            }
+        }
+        var paragraphs: [[String]] = []
+        var previousBottom: CGFloat?
+        for row in rows {
+            let sorted = row.sorted { $0.box.minX < $1.box.minX }
+            let text = sorted.map(\.text).joined(separator: " ")
+            let top = sorted.map { $0.box.maxY }.max() ?? 0
+            let bottom = sorted.map { $0.box.minY }.min() ?? 0
+            if let previousBottom, previousBottom - top <= median * 1.5, !paragraphs.isEmpty {
+                paragraphs[paragraphs.count - 1].append(text)
+            } else {
+                paragraphs.append([text])
+            }
+            previousBottom = bottom
+        }
+        return paragraphs.map { escapeLineStart($0.joined(separator: " ")) }.joined(separator: "\n\n")
+    }
+
+    /// Stops OCR text from turning into headings, lists or quotes.
+    static func escapeLineStart(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first else { return trimmed }
+        if "#-*+>".contains(first) { return "\\" + trimmed }
+        let digits = trimmed.prefix { $0.isASCII && $0.isNumber }
+        if !digits.isEmpty {
+            let rest = trimmed.dropFirst(digits.count)
+            if let mark = rest.first, mark == "." || mark == ")" {
+                return digits + "\\" + rest
+            }
+        }
+        return trimmed
+    }
+}
