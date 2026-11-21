@@ -12,6 +12,9 @@ public enum PDFTextRecognizerError: Error, Equatable {
 }
 
 /// Reads the text of an image-only (scanned) PDF with Apple's on-device Vision OCR and returns Markdown.
+/// Recognition uses `.fast`: it runs on the CPU alone, so the sandboxed helper needs neither the GPU nor the
+/// Neural Engine. It is less precise than `.accurate` on hard scans and supports fewer languages (the
+/// European ones are fine).
 public enum PDFTextRecognizer {
     /// Longest side of a rendered page, in pixels (bounds memory).
     static let maxPixelSide: CGFloat = 4000
@@ -94,7 +97,7 @@ public enum PDFTextRecognizer {
 
     private static func recognise(_ image: CGImage) throws -> String {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
+        request.recognitionLevel = .fast
         request.usesLanguageCorrection = true
         request.automaticallyDetectsLanguage = true
         try useCPUOnly(request)
@@ -109,8 +112,8 @@ public enum PDFTextRecognizer {
     }
 
     /// Runs every stage of `request` on the CPU, to keep the GPU's IOKit user client out of the
-    /// OCR helper's sandbox. (On macOS 27 the accurate text detector still compiles and runs its
-    /// model on the Neural Engine whatever is set here.)
+    /// OCR helper's sandbox. This only holds for `.fast`: on macOS 27 the `.accurate` detector runs
+    /// its model on the Neural Engine whatever is set here, and the sandbox denies that.
     private static func useCPUOnly(_ request: VNRequest) throws {
         for (stage, devices) in try request.supportedComputeStageDevices {
             guard let cpu = devices.first(where: { if case .cpu = $0 { true } else { false } }) else { continue }
