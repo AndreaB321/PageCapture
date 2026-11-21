@@ -86,7 +86,12 @@ public final class CaptureController {
     }
 
     public func send(_ event: CaptureEvent) {
-        for effect in machine.handle(event) {
+        let wasIdle = machine.phase == .idle
+        let effects = machine.handle(event)
+        // A dialog already on screen would block the page being picked or captured; later ones are
+        // suppressed (see `suppressPanels`).
+        if wasIdle, machine.phase != .idle { popupPresenter.finishAllPanels() }
+        for effect in effects {
             perform(effect)
         }
     }

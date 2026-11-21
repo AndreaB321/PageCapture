@@ -16,14 +16,28 @@ area inside it, and saves it as PDF and/or Markdown with the images saved separa
   for a pop-up, so a script's new window is never loaded in place. Anything a pop-up opens is
   another pop-up. Pop-ups close when the page closes them, when the user closes them, or when the
   main window closes. They share the browser's cookies, so a sign-in done in a pop-up persists.
-- A pop-up's window title always starts with the host of the page in it, so a page cannot pass
-  itself off as another site by its title; a page not served over https is marked "Not Secure".
+- A pop-up always shows the origin of the page in it, so a page cannot pass itself off as another
+  site, such as a fake sign-in page:
+  - The origin is the host, with the port when it is not the scheme's default, of the last page
+    that committed in the pop-up. A navigation still loading, or one that failed, does not change
+    it, as the old page is still the one on screen.
+  - It is shown in a bar under the title bar, cut at its start when the window is narrow, so the
+    end of the host (the registrable domain, which a site cannot choose) always shows. Pop-ups are
+    at least 400 points wide. The window title (Window menu, accessibility) holds the full origin
+    followed by the page's title.
+  - A blank pop-up (`window.open('')`, about:blank) that its opener writes into shows the opener's
+    origin until it loads a page of its own; a `blob:` URL shows the origin inside it; a `data:`
+    URL says "data URL from" the opener's origin.
+  - A page not served over https is marked "Not Secure".
 - A pop-up window is never a capture target: picking and capturing only ever work in the main
   window's page.
 - JavaScript alert, confirm and prompt dialogs are shown as sheets. From a page's second dialog
   on, the user can turn off that page's further dialogs until it navigates. While picking or
   capturing, dialogs are not shown and complete at once (alert: nothing, confirm: Cancel, prompt:
-  no answer), so a page cannot hold up a capture.
+  no answer), so a page cannot hold up a capture. A dialog already on screen when picking starts
+  is completed the same way.
+- Known limitation: a script calling `click()` on a `target="_blank"` link loads the link in the
+  main window, as if the user had clicked it, because WebKit reports it as a user link activation.
 - Content is read from the DOM, not from screenshots, so text, links and original images survive.
   Script runs in every frame, including cross-origin iframes.
 

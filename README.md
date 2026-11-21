@@ -191,11 +191,17 @@ browser. PageCapture keeps that sign-in for next time. It does not use the sign-
 Chrome.
 
 Sign-in pop-ups, such as "Sign in with Google", and any other window a page opens by itself,
-open in a window of their own and close themselves when you are done. The pop-up's title always
-starts with the site it is showing, and says "Not Secure" when the page is not on https. Pop-up
-windows are never captured: picking and capturing only work in the main window. A link you click
-that would open a new window opens in the PageCapture window instead; Back returns to the page
-before.
+open in a window of their own and close themselves when you are done. A bar under the pop-up's
+title always shows the site it is showing, and says "Not Secure" when the page is not on https.
+When the window is narrow the site's name is shortened at its start, so its end, the part that
+tells you whose site it is, stays visible. Pop-up windows are never captured: picking and
+capturing only work in the main window. A link you click that would open a new window opens in
+the PageCapture window instead; Back returns to the page before.
+
+Messages a site shows (alert, confirm and prompt dialogs) appear on its window. When a site shows
+them again and again, tick "Don't show more dialogs from this page" to turn them off until you go
+to another page. While you pick or capture, dialogs are skipped, and one still open when you
+press ⌘⇧S is closed, so a site cannot hold up a capture.
 
 When saving videos from YouTube or Vimeo, only that site's own cookies are passed to the download
 tool, in a private temporary file that is deleted straight away. Nothing temporary is written into
@@ -206,8 +212,8 @@ your capture folder.
 | Shortcut | What it does |
 | --- | --- |
 | ⌘⇧S | Start picking · cancel picking · stop capturing and keep what was collected |
-| Return | While picking: capture the whole page |
-| Esc | While picking: cancel |
+| Return | While picking, in the main window: capture the whole page |
+| Esc | While picking, in the main window: cancel |
 | ⌘[ / ⌘] | Back / forward |
 | ⌘? | Open the manual |
 

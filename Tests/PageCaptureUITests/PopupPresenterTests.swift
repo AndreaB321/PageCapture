@@ -46,7 +46,10 @@ final class PopupPresenterTests: XCTestCase {
 
     /// A page chooses its own title, so the host always leads and a page off https is marked.
     func testPopupTitleAlwaysShowsTheOrigin() {
-        let title = PopupPresenter.Popup.title
+        func title(_ url: URL?, _ pageTitle: String?, creator: SiteOrigin? = nil) -> String {
+            PopupPresenter.Popup.title(origin: PopupPresenter.Popup.origin(committedURL: url, creator: creator),
+                                       pageTitle: pageTitle)
+        }
         XCTAssertEqual(title(URL(string: "https://accounts.example.com/signin"), "Sign in"),
                        "accounts.example.com — Sign in")
         XCTAssertEqual(title(URL(string: "https://evil.example/"), "accounts.google.com"),
@@ -55,8 +58,26 @@ final class PopupPresenterTests: XCTestCase {
         XCTAssertEqual(title(URL(string: "https://accounts.example.com/"), nil), "accounts.example.com")
         XCTAssertEqual(title(URL(string: "http://login.example.com/"), "Sign in"),
                        "Not Secure — login.example.com — Sign in")
-        XCTAssertEqual(title(URL(string: "about:blank"), nil), "Not Secure — about")
-        XCTAssertEqual(title(nil, nil), "Not Secure — about")
+        XCTAssertEqual(title(URL(string: "https://accounts.example.com:81/"), nil), "accounts.example.com:81")
+        XCTAssertEqual(title(URL(string: "about:blank"), nil), "Not Secure — about:blank")
+        XCTAssertEqual(title(nil, nil), "Not Secure — about:blank")
+    }
+
+    /// Documents that have no host of their own say where they come from: an about:blank pop-up its
+    /// opener writes into shows the opener, a blob: URL the origin inside it.
+    func testPopupOriginOfDocumentsWithoutAHost() {
+        let origin = PopupPresenter.Popup.origin
+        let evil = SiteOrigin(scheme: "https", host: "evil.example", port: 443)
+        XCTAssertEqual(origin(URL(string: "about:blank"), evil).text, "evil.example")
+        XCTAssertTrue(origin(URL(string: "about:blank"), evil).secure)
+        XCTAssertEqual(origin(nil, SiteOrigin(scheme: "http", host: "evil.example", port: 8080)),
+                       .init(text: "evil.example:8080", secure: false))
+        XCTAssertEqual(origin(URL(string: "blob:https://evil.example/0b5c-41"), nil),
+                       .init(text: "evil.example", secure: true))
+        XCTAssertEqual(origin(URL(string: "blob:null/0b5c-41"), evil), .init(text: "blob URL", secure: false))
+        XCTAssertEqual(origin(URL(string: "data:text/html,<p>accounts.google.com"), evil),
+                       .init(text: "data URL from evil.example", secure: false))
+        XCTAssertEqual(origin(URL(string: "file:///tmp/a.html"), evil), .init(text: "file", secure: false))
     }
 
     // MARK: Windows
@@ -186,6 +207,101 @@ final class PopupPresenterTests: XCTestCase {
         }
     }
 
+    /// A presenter for a main web view showing `pctest://opener.test/A`, whose pages (and its pop-ups')
+    /// come from `HostSchemeHandler`.
+    private func makePresenter() async throws -> (PopupPresenter, WKWebView, NSWindow) {
+        _ = NSApplication.shared
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(HostSchemeHandler(), forURLScheme: HostSchemeHandler.scheme)
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let presenter = PopupPresenter(mainWebView: webView)
+        webView.uiDelegate = presenter
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled, .closable],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        window.orderFrontRegardless()
+        webView.load(URLRequest(url: URL(string: "pctest://opener.test/A")!))
+        try await waitUntil("opener loaded") { webView.title == "A" && !webView.isLoading }
+        return (presenter, webView, window)
+    }
+
+    private func openPopup(_ script: String, from webView: WKWebView,
+                           in presenter: PopupPresenter) async throws -> PopupPresenter.Popup {
+        _ = try await evaluate(script + "; 'ok'", in: webView)
+        try await waitUntil("pop-up opened") { presenter.popups.count == 1 }
+        return try XCTUnwrap(presenter.popups.first)
+    }
+
+    /// `webView.url` names a navigation as soon as it starts, while the old page stays on screen and
+    /// usable; a page could start one to a site that never answers and look like it.
+    func testPopupOriginOnlyChangesWhenANavigationCommits() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("window.open('pctest://site.test/B')", from: main, in: presenter)
+        try await waitUntil("pop-up shows its page") { popup.window.title == "Not Secure — site.test — B" }
+
+        _ = try await evaluate("location.href = 'pctest://accounts.google.com:81/hang'; 'ok'", in: popup.webView)
+        try await waitUntil("navigation pending") { popup.webView.url?.host() == "accounts.google.com" }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(popup.window.title, "Not Secure — site.test — B")
+
+        _ = try await evaluate("location.href = 'pctest://accounts.google.com/fail'; 'ok'", in: popup.webView)
+        try await waitUntil("navigation failed") { !popup.webView.isLoading }
+        XCTAssertEqual(popup.window.title, "Not Secure — site.test — B")
+
+        _ = try await evaluate("location.href = 'pctest://other.test:81/C'; 'ok'", in: popup.webView)
+        try await waitUntil("committed page shown, with its port") {
+            popup.window.title == "Not Secure — other.test:81 — C"
+        }
+    }
+
+    /// The title bar cuts a long title at its end, so the host is shown in a field cut at its start:
+    /// the registrable domain at the end of the host always shows.
+    func testPopupShowsTheEndOfALongHostAndKeepsAMinimumWidth() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let host = "accounts.google.com.secure-login.evil.example"
+        let popup = try await openPopup("window.open('pctest://\(host)/B', 'p', 'width=240,height=300')",
+                                        from: main, in: presenter)
+        try await waitUntil("pop-up shows its page") { popup.window.title == "Not Secure — \(host) — B" }
+
+        func textFields(in view: NSView) -> [NSTextField] {
+            ((view as? NSTextField).map { [$0] } ?? []) + view.subviews.flatMap(textFields)
+        }
+        let fields = popup.window.titlebarAccessoryViewControllers.flatMap { textFields(in: $0.view) }
+        let hostField = try XCTUnwrap(fields.first { $0.stringValue == host }, "a field shows the host")
+        XCTAssertEqual(hostField.lineBreakMode, .byTruncatingHead)
+        XCTAssertTrue(fields.contains { $0.stringValue == "Not Secure" && !$0.isHidden })
+        XCTAssertEqual(popup.window.titleVisibility, .hidden, "the title bar would cut the host at its end")
+
+        XCTAssertGreaterThanOrEqual(NewWindowPolicy.minimumPopupSize.width, 400)
+        XCTAssertEqual(popup.window.contentRect(forFrameRect: popup.window.frame).width,
+                       NewWindowPolicy.minimumPopupSize.width, "a page cannot ask for a narrower pop-up")
+        XCTAssertEqual(popup.window.contentMinSize.width, NewWindowPolicy.minimumPopupSize.width,
+                       "nor can the user make it narrower")
+        popup.window.layoutIfNeeded()
+        let bar = try XCTUnwrap(hostField.superview)
+        XCTAssertGreaterThan(hostField.frame.width, 200, "the host keeps most of a narrow window")
+        XCTAssertLessThanOrEqual(hostField.frame.maxX, bar.bounds.maxX, "and its end is inside the bar")
+    }
+
+    /// `window.open('')` gives an about:blank page of the opener's origin, which the opener can fill in.
+    func testBlankPopupWrittenByItsOpenerShowsTheOpenersOrigin() async throws {
+        let (presenter, main, window) = try await makePresenter()
+        defer { window.close() }
+        let popup = try await openPopup("""
+            const w = window.open('');
+            w.document.write('<title>accounts.google.com</title><p>Sign in</p>');
+            w.document.close()
+            """, from: main, in: presenter)
+        try await waitUntil("pop-up shows the written page") {
+            popup.window.title == "Not Secure — opener.test — accounts.google.com"
+        }
+    }
+
     /// A script `click()` on a link is reported as link-activated, like a real click, so this drives
     /// the in-place path end to end.
     func testTargetBlankLinkLoadsInTheMainWebView() async throws {
@@ -282,6 +398,23 @@ final class PopupPresenterTests: XCTestCase {
         try await waitUntil("panel answered") { next.done }
     }
 
+    /// A dialog already on screen when ⌘⇧S is pressed would block the page being picked.
+    func testDialogOpenWhenPickingStartsCompletesWithItsDefault() async throws {
+        let (controller, window) = try await makeController(page: Self.opener)
+        defer { window.close() }
+        let presenter = controller.popupPresenter
+
+        let result = start("String(confirm('Stay?'))", in: controller.webView)
+        try await waitUntil("dialog shown") { presenter.openPanels.count == 1 && window.attachedSheet != nil }
+        XCTAssertTrue(controller.handleKey(1, characters: "s", flags: [.command, .shift],
+                                           windowNumber: window.windowNumber))
+        XCTAssertEqual(controller.machine.phase, .picking)
+        try await waitUntil("dialog completed", timeout: 3) { result.done }
+        XCTAssertEqual(result.value, "false")
+        XCTAssertTrue(presenter.openPanels.isEmpty)
+        try await waitUntil("sheet gone") { window.attachedSheet == nil }
+    }
+
     /// WebKit requires every panel's completion handler to be called, also when its pop-up closes first.
     func testClosingAPopupCompletesItsOpenPanel() async throws {
         let (controller, window) = try await makeController(page: Self.opener)
@@ -338,4 +471,28 @@ final class PopupPresenterTests: XCTestCase {
         XCTFail("Timed out waiting for \(what)")
         throw CancellationError()
     }
+}
+
+/// Serves `pctest://<host>/<name>` as a page titled `<name>`. `/hang` never answers, so its navigation
+/// stays pending; `/fail` fails.
+private final class HostSchemeHandler: NSObject, WKURLSchemeHandler {
+    static let scheme = "pctest"
+
+    func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
+        guard let url = task.request.url else { return }
+        switch url.lastPathComponent {
+        case "hang":
+            return
+        case "fail":
+            task.didFailWithError(URLError(.cannotConnectToHost))
+        case let name:
+            let body = Data("<title>\(name)</title><p>\(url.host() ?? "")</p>".utf8)
+            task.didReceive(URLResponse(url: url, mimeType: "text/html", expectedContentLength: body.count,
+                                        textEncodingName: "utf-8"))
+            task.didReceive(body)
+            task.didFinish()
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 }

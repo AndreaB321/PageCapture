@@ -16,6 +16,40 @@ struct WindowFeatureValues: Equatable {
     }
 }
 
+/// A page's origin as plain values, so it can be tested: scheme, host, and the port when it is not
+/// the scheme's default.
+struct SiteOrigin: Equatable {
+    var scheme: String
+    var host: String
+    var port: Int?
+
+    init(scheme: String, host: String, port: Int? = nil) {
+        self.scheme = scheme.lowercased()
+        self.host = host
+        let defaultPort = ["http": 80, "https": 443][self.scheme]
+        self.port = port == 0 || port == defaultPort ? nil : port
+    }
+
+    init?(url: URL) {
+        guard let scheme = url.scheme else { return nil }
+        self.init(scheme: scheme, host: url.host() ?? "", port: url.port)
+    }
+
+    /// Nil for an opaque origin (a sandboxed frame), which has neither scheme nor host.
+    @MainActor init?(_ origin: WKSecurityOrigin) {
+        guard !origin.protocol.isEmpty else { return nil }
+        self.init(scheme: origin.protocol, host: origin.host, port: origin.port)
+    }
+
+    /// "host" or "host:port"; the scheme for a URL without a host, such as a file.
+    var text: String {
+        guard !host.isEmpty else { return scheme }
+        return port.map { "\(host):\($0)" } ?? host
+    }
+
+    var secure: Bool { scheme == "https" }
+}
+
 /// What happens when a page asks for a new window.
 enum NewWindowPolicy: Equatable {
     /// Load the request in the web view that asked, as a normal navigation (back returns).
@@ -24,7 +58,8 @@ enum NewWindowPolicy: Equatable {
     case openPopup
 
     static let defaultPopupSize = NSSize(width: 900, height: 700)
-    static let minimumPopupSize = NSSize(width: 240, height: 180)
+    /// Wide enough that the origin bar shows a long host's end next to "Not Secure".
+    static let minimumPopupSize = NSSize(width: 400, height: 180)
 
     /// Only a link the user clicks (`target="_blank"`) loads in place, in the main window. Every window
     /// a script opens is a pop-up: WebKit does not report the `popup` feature, so `window.open(url)`
@@ -58,20 +93,60 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         let window: NSWindow
         private weak var presenter: PopupPresenter?
         private var observations: [NSKeyValueObservation] = []
+        /// The URL of the page last committed in the pop-up. `webView.url` cannot be used: it reports a
+        /// pending navigation's URL while the old page is still shown, and keeps it if the load fails.
+        private var committedURL: URL?
+        /// The opener's origin, kept while the pop-up only shows documents its opener made (about:blank,
+        /// a data URL).
+        private var creator: SiteOrigin?
+        /// Where the page comes from, in a field of its own under the title bar. It is cut at its start,
+        /// so the end of the host, the part a site cannot choose, always shows.
+        let originField = NSTextField(labelWithString: "")
+        private let securityField = NSTextField(labelWithString: "Not Secure")
+        private let pageTitleField = NSTextField(labelWithString: "")
 
-        /// The window title: the page's host always comes first, so a page cannot pass itself off as
-        /// another site by its title, and a page not served over https says so.
-        static func title(url: URL?, pageTitle: String?) -> String {
-            let host = url?.host().flatMap { $0.isEmpty ? nil : $0 }
-            var parts = [host ?? url?.scheme ?? "about"]
-            if url?.scheme?.lowercased() != "https" { parts.insert("Not Secure", at: 0) }
+        /// The text that says where a page comes from, and whether it is served over https.
+        struct OriginText: Equatable {
+            var text: String
+            var secure: Bool
+        }
+
+        /// Where the pop-up's page comes from: the host (and a port other than the scheme's default) of
+        /// the committed URL. An about: page shows `creator`'s, a blob: URL the origin inside it, and a
+        /// data: URL says what it is.
+        static func origin(committedURL url: URL?, creator: SiteOrigin?) -> OriginText {
+            let scheme = url?.scheme?.lowercased() ?? "about"
+            switch scheme {
+            case "about":
+                return creator.map { OriginText(text: $0.text, secure: $0.secure) }
+                    ?? OriginText(text: "about:blank", secure: false)
+            case "data":
+                return OriginText(text: creator.map { "data URL from \($0.text)" } ?? "data URL", secure: false)
+            case "blob":
+                let inner = url.flatMap { URL(string: String($0.absoluteString.dropFirst("blob:".count))) }
+                guard let inner, let site = SiteOrigin(url: inner), !site.host.isEmpty
+                else { return OriginText(text: "blob URL", secure: false) }
+                return OriginText(text: site.text, secure: site.secure)
+            default:
+                guard let url, let site = SiteOrigin(url: url) else { return OriginText(text: scheme, secure: false) }
+                return OriginText(text: site.text, secure: site.secure)
+            }
+        }
+
+        /// The window title, used by the Window menu and accessibility: the origin always comes first,
+        /// so a page cannot pass itself off as another site by its title, and a page not served over
+        /// https says so.
+        static func title(origin: OriginText, pageTitle: String?) -> String {
+            var parts = [origin.text]
+            if !origin.secure { parts.insert("Not Secure", at: 0) }
             if let pageTitle, !pageTitle.isEmpty { parts.append(pageTitle) }
             return parts.joined(separator: " — ")
         }
 
-        init(webView: WKWebView, size: NSSize, presenter: PopupPresenter) {
+        init(webView: WKWebView, size: NSSize, opener: SiteOrigin?, presenter: PopupPresenter) {
             self.webView = webView
             self.presenter = presenter
+            creator = opener
             window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
@@ -79,19 +154,63 @@ final class PopupPresenter: NSObject, WKUIDelegate {
             // Released by dropping `popups`' reference, not by AppKit, so there is one owner.
             window.isReleasedWhenClosed = false
             window.contentView = webView
+            window.contentMinSize = NewWindowPolicy.minimumPopupSize
+            // The title bar would cut a long host at its end: the origin bar shows it instead.
+            window.titleVisibility = .hidden
+            window.addTitlebarAccessoryViewController(makeOriginBar())
+            // The bar takes its height from the content: give the page the size it asked for.
+            window.setContentSize(size)
             window.delegate = self
             webView.navigationDelegate = self
             observations = [
-                webView.observe(\.url, options: [.initial, .new]) { [weak window] webView, _ in
-                    MainActor.assumeIsolated { window?.title = Self.title(url: webView.url, pageTitle: webView.title) }
-                },
-                webView.observe(\.title, options: [.new]) { [weak window] webView, _ in
-                    MainActor.assumeIsolated { window?.title = Self.title(url: webView.url, pageTitle: webView.title) }
+                webView.observe(\.title, options: [.new]) { [weak self] _, _ in
+                    MainActor.assumeIsolated { self?.showOrigin() }
                 },
             ]
+            showOrigin()
         }
 
+        /// The bar under the title bar: "Not Secure" (when so), the origin, then the page's title, which
+        /// gives way first when the window is narrow. Both give way rather than widen the window, which
+        /// constraints above `windowSizeStayPut` would do.
+        private func makeOriginBar() -> NSTitlebarAccessoryViewController {
+            originField.lineBreakMode = .byTruncatingHead
+            originField.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+            originField.setContentCompressionResistancePriority(.windowSizeStayPut - 10, for: .horizontal)
+            securityField.textColor = .systemRed
+            securityField.setContentCompressionResistancePriority(.required, for: .horizontal)
+            pageTitleField.lineBreakMode = .byTruncatingTail
+            pageTitleField.textColor = .secondaryLabelColor
+            pageTitleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            let stack = NSStackView(views: [securityField, originField, pageTitleField])
+            stack.orientation = .horizontal
+            stack.alignment = .firstBaseline
+            stack.spacing = 8
+            stack.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 6, right: 12)
+            stack.detachesHiddenViews = true
+            stack.frame.size = stack.fittingSize
+            let bar = NSTitlebarAccessoryViewController()
+            bar.layoutAttribute = .bottom
+            bar.view = stack
+            return bar
+        }
+
+        private func showOrigin() {
+            let origin = Self.origin(committedURL: committedURL, creator: creator)
+            originField.stringValue = origin.text
+            securityField.isHidden = origin.secure
+            pageTitleField.stringValue = webView.title ?? ""
+            window.title = Self.title(origin: origin, pageTitle: webView.title)
+        }
+
+        /// Only a committed page changes the origin shown. A failed load leaves the last one; a
+        /// same-document navigation (history.pushState, a #fragment) cannot change the origin.
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            committedURL = webView.url
+            if let scheme = committedURL?.scheme?.lowercased(), scheme != "about", scheme != "data" {
+                creator = nil
+            }
+            showOrigin()
             presenter?.pageDidChange(in: webView)
         }
 
@@ -186,7 +305,9 @@ final class PopupPresenter: NSObject, WKUIDelegate {
             webView.load(navigationAction.request)
             return nil
         case .openPopup:
+            // The pop-up starts on an empty document of the opener's origin, which the opener can write.
             return openPopup(configuration: configuration, features: WindowFeatureValues(windowFeatures),
+                             opener: SiteOrigin(navigationAction.sourceFrame.securityOrigin),
                              over: mainWebView?.window)
         }
     }
@@ -197,14 +318,14 @@ final class PopupPresenter: NSObject, WKUIDelegate {
 
     /// WebKit loads the request into the returned web view itself.
     private func openPopup(configuration: WKWebViewConfiguration, features: WindowFeatureValues,
-                           over parent: NSWindow?) -> WKWebView {
+                           opener: SiteOrigin?, over parent: NSWindow?) -> WKWebView {
         // `configuration` must be used as given: it links the pop-up to its opener.
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.uiDelegate = self
         let screen = (parent?.screen ?? NSScreen.main)?.visibleFrame
         let size = NewWindowPolicy.popupSize(features: features,
                                              fitting: screen?.size ?? NewWindowPolicy.defaultPopupSize)
-        let popup = Popup(webView: webView, size: size, presenter: self)
+        let popup = Popup(webView: webView, size: size, opener: opener, presenter: self)
         if let parent {
             let frame = popup.window.frame
             popup.window.setFrameOrigin(NSPoint(x: parent.frame.midX - frame.width / 2,
@@ -286,13 +407,21 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         }
     }
 
+    /// Ends every panel on screen as cancelled, which gives each its default answer: a capture is
+    /// starting, and a panel left open would block its page.
+    func finishAllPanels() {
+        for open in openPanels { finish(open) }
+    }
+
     /// Ends the panels shown to `webView` as cancelled, so their completion handlers are called.
     private func finishPanels(in webView: WKWebView) {
-        for open in openPanels where open.webView === webView {
-            if let window = webView.window, let sheet = window.attachedSheet, sheet === open.alert.window {
-                window.endSheet(sheet, returnCode: .cancel)
-            }
-            open.finish(.cancel)
+        for open in openPanels where open.webView === webView { finish(open) }
+    }
+
+    private func finish(_ open: OpenPanel) {
+        if let window = open.webView?.window, let sheet = window.attachedSheet, sheet === open.alert.window {
+            window.endSheet(sheet, returnCode: .cancel)
         }
+        open.finish(.cancel)
     }
 }
