@@ -87,8 +87,9 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   LGPL, remux only; yt-dlp; Deno). yt-dlp runs from a working copy in
   `~/Library/Application Support/PageCapture/` so the menu item **Update Download Tools** can run
   its own updater without touching the signed app.
-- The app also bundles a pinned Python with Microsoft MarkItDown (documents, no audio/video, no
-  network services) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
+- The app also bundles a pinned Python with Microsoft MarkItDown (documents, no audio/video; the runtime makes no
+  network calls on its own, and the app only ever passes it local files, though MarkItDown can fetch a
+  URL if given one) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
   a symlink to it. It is the runtime for converting documents to Markdown, coming in a later version;
   nothing in the app uses it yet.
 

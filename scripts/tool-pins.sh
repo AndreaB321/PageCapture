@@ -42,12 +42,25 @@ FLATBUFFERS_VERSION=25.12.19
 FLATBUFFERS_LICENSE_SHA256=cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
 COBBLE_VERSION=0.1.4
 COBBLE_README_SHA256=d6d46202db973b560d2f521dced9110b3e0a46d9a75e1428dade8b7608dd0cca
-# lxml's wheel links GNU libiconv (LGPL-2.1) statically: its source and lxml's (with the build
-# scripts) go into the sources bundle. fetch-tools.sh checks both versions against the install.
+# lxml's wheel links its C libraries statically: GNU libiconv (LGPL-2.1), libxml2, libxslt and zlib.
+# Their sources and lxml's (with the build scripts) go into the sources bundle. fetch-tools.sh
+# checks the libiconv and lxml versions against the install. The versions are those lxml 6.1.3
+# reports (etree.LIBXML_COMPILED_VERSION, LIBXSLT_COMPILED_VERSION) and its binary's zlib banner.
 LXML_VERSION=6.1.3
 LXML_SRC_SHA256=45222d94ddd511536f3b2f7d9deae3b2339b4ce0f075f1ca25703b07cad9dd21
 LIBICONV_VERSION=1.18
 LIBICONV_SHA256=3b08f5f4f9b4eb82f151a7040bfd6fe6c6fb922efe4b1659c66ea933276965e8
+# libxml2 and libxslt: the hashes are those in download.gnome.org's libxml2-2.14.6.sha256sum and
+# libxslt-1.1.43.sha256sum, and in lxml's own buildlibxml.py.
+LIBXML2_VERSION=2.14.6
+LIBXML2_SHA256=7ce458a0affeb83f0b55f1f4f9e0e55735dbfc1a9de124ee86fb4a66b597203a
+LIBXSLT_VERSION=1.1.43
+LIBXSLT_SHA256=5a3d6b383ca5afc235b171118e90f5ff6aa27e9fea3303065231a6d403f0183a
+# zlib 1.3.2: zlib.net has moved on to 1.4, so this is from https://zlib.net/fossils/. The same
+# hash is the one of the GitHub release asset (madler/zlib v1.3.2) and of lxml's buildlibxml.py.
+# zlib publishes no .sha256 or .asc file for it.
+ZLIB_VERSION=1.3.2
+ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
 LGPL21_SHA256=20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95
 
 CACHE=build/tools-cache
