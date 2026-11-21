@@ -37,6 +37,13 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
   A new capture or export behaviour gets its own fixture page and a test that fails without the change.
 - Video tests serve `Fixtures/video` through `FixtureURLProtocol`; `scripts/make-video-fixtures.sh`
   regenerates the media.
+- WebKit throttles timers in the test window (pauses of ~1 s are common). Timing tests log event
+  times inside the fixture page and assert on the gaps between them, never on wall-clock durations
+  of a whole capture. When a timing test survives a deliberate break of the code it covers, log
+  the fixture's event times before redesigning it.
+- A fix's test must fail with the fix set aside: put the fix's own source lines in a patch file
+  (`git diff <base> -- <paths> > .build/scratch/x.patch && git apply -R …`), run the test, then
+  `git apply` it back and rebuild.
 
 ## Working rules
 
