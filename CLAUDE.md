@@ -30,8 +30,9 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
   - `PDFTextRecognizer`: Vision OCR of image-only PDFs to Markdown (`hasTextLayer` tells scans apart); no callers yet.
   - `VideoDownloader`, `Tools`: external processes (ffmpeg, yt-dlp, Deno).
   - `DocumentConverter`: one local file to Markdown with the bundled MarkItDown (pinned Python +
-    MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (no network,
-    writes only in its work directory); no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
+    MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (`(deny
+    default)`: reads only the runtime, its work directory and system libraries, writes only in its
+    work directory, no network, no child processes); no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
 - `Sources/PageCaptureUI`: windows and views; `CaptureController` performs the state machine's effects.
 - `Sources/PageCapture`: the app entry point. `Sources/ManualShots`: manual screenshots, not shipped.
 

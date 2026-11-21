@@ -97,7 +97,8 @@ final class DocumentConverterTests: XCTestCase {
         converter.timeout = .seconds(3)
         let launch = OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>(initialState: nil)
         converter.onLaunch = { pid, directory in launch.withLock { $0 = (pid, directory) } }
-        // Python starts a child of its own, which must be stopped too.
+        // Python starts a child of its own, which must be stopped too (if the sandbox let it).
+        converter.profile = Self.forkingProfile
         let script = """
             import subprocess, time
             subprocess.Popen(["/bin/sleep", "60"])
@@ -124,6 +125,86 @@ final class DocumentConverterTests: XCTestCase {
             let markdown = try await converter.markdown(forFile: documents.appendingPathComponent("page.html"))
             XCTFail("Not stopped: \(markdown)")
         } catch DocumentConversionError.timedOut {}
+    }
+
+    /// Python has exited when the time is up, but its output is still being read (a process that
+    /// left its group holds it open): that run has not timed out.
+    func testRunThatExitedBeforeTheTimeoutIsNotATimeout() async throws {
+        converter.timeout = .milliseconds(1500)
+        converter.profile = Self.forkingProfile
+        let output = try await converter.runScript(Self.leaveAProcessHoldingTheOutput(exitAfter: 0.5))
+        let escaped = try XCTUnwrap(pid_t(output.trimmingCharacters(in: .whitespacesAndNewlines)), output)
+        Darwin.kill(escaped, SIGKILL)
+    }
+
+    // MARK: - Stopping
+
+    func testCancellingStopsTheRunAndRemovesTheWorkDirectory() async throws {
+        let launch = OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>(initialState: nil)
+        converter.onLaunch = { pid, directory in launch.withLock { $0 = (pid, directory) } }
+        let converter = converter!
+        let task = Task { try await converter.runScript("import time\ntime.sleep(30)") }
+        let (pid, directory) = try await Self.waitForLaunch(launch)
+
+        let cancelled = ContinuousClock.now
+        task.cancel()
+        do {
+            let output = try await task.value
+            XCTFail("Not cancelled: \(output)")
+        } catch is CancellationError {}
+
+        XCTAssertLessThan(ContinuousClock.now - cancelled, .seconds(5))
+        try await Self.assertGroupGone(pid)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    func testStopAllRunningStopsAConversion() async throws {
+        let launch = OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>(initialState: nil)
+        converter.onLaunch = { pid, directory in launch.withLock { $0 = (pid, directory) } }
+        let converter = converter!
+        let task = Task { try await converter.runScript("import time\ntime.sleep(30)") }
+        let (pid, directory) = try await Self.waitForLaunch(launch)
+
+        Tools.stopAllRunning()
+        do {
+            let output = try await task.value
+            XCTFail("Not stopped: \(output)")
+        } catch let DocumentConversionError.failed(status, _) {
+            XCTAssertEqual(status, SIGTERM)
+        }
+
+        try await Self.assertGroupGone(pid)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    /// With a sandbox that let Python start processes: one it left running in its group is killed
+    /// as soon as Python exits.
+    func testNothingPythonStartedOutlivesIt() async throws {
+        converter.profile = Self.forkingProfile
+        let script = """
+            import subprocess
+            child = subprocess.Popen(["/bin/sleep", "30"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(child.pid)
+            """
+
+        let output = try await converter.runScript(script)
+
+        let child = try XCTUnwrap(pid_t(output.trimmingCharacters(in: .whitespacesAndNewlines)), output)
+        defer { Darwin.kill(child, SIGKILL) }
+        try await Self.assertGone(child)
+    }
+
+    /// With a sandbox that let Python start processes: one that left its group and keeps the output
+    /// open cannot be killed, but the run still returns soon after Python exits.
+    func testRunReturnsWhenAProcessThatLeftTheGroupKeepsTheOutputOpen() async throws {
+        converter.profile = Self.forkingProfile
+        let start = ContinuousClock.now
+
+        let output = try await converter.runScript(Self.leaveAProcessHoldingTheOutput(exitAfter: 0))
+
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(10))
+        let escaped = try XCTUnwrap(pid_t(output.trimmingCharacters(in: .whitespacesAndNewlines)), output)
+        Darwin.kill(escaped, SIGKILL)
     }
 
     // MARK: - Sandbox
@@ -174,6 +255,95 @@ final class DocumentConverterTests: XCTestCase {
         XCTAssertEqual(before, after)
     }
 
+    func testSandboxDeniesStartingProcesses() async throws {
+        let output = try await converter.runScript(Self.attempt + """
+            import subprocess
+            def fork():
+                pid = os.fork()
+                if pid == 0:
+                    os._exit(0)
+                os.waitpid(pid, 0)
+            print("fork", attempt(fork))
+            print("subprocess", attempt(lambda: subprocess.run(["/usr/bin/true"])))
+            print("posix_spawn", attempt(lambda: os.waitpid(os.posix_spawn("/usr/bin/true", ["true"], {}), 0)))
+            sys.stdout.flush()
+            print("exec", attempt(lambda: os.execv("/usr/bin/true", ["true"])))
+            """)
+
+        XCTAssertEqual(output.split(separator: "\n"), ["fork EPERM", "subprocess EPERM", "posix_spawn EPERM", "exec EPERM"], output)
+    }
+
+    func testSandboxDeniesReadingOutsideTheRuntimeAndTheWorkDirectory() async throws {
+        let secret = folder.appendingPathComponent("secret.txt")
+        try "secret".write(to: secret, atomically: true, encoding: .utf8)
+        let realSecret = try XCTUnwrap(realpath(secret.path, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        })
+
+        let output = try await converter.runScript(Self.attempt + """
+            print("file", attempt(lambda: open(sys.argv[1]).read()))
+            print("through /System", attempt(lambda: open("/System/Volumes/Data" + sys.argv[1]).read()))
+            print("home", attempt(lambda: os.listdir(sys.argv[2])))
+            """, arguments: [realSecret, NSHomeDirectory()])
+
+        XCTAssertEqual(output.split(separator: "\n"), ["file EPERM", "through /System EPERM", "home EPERM"], output)
+    }
+
+    func testSandboxDeniesSignallingOtherProcesses() async throws {
+        let sleep = Process()
+        sleep.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleep.arguments = ["30"]
+        try sleep.run()
+        defer { sleep.terminate() }
+
+        let output = try await converter.runScript(Self.attempt + """
+            print("kill", attempt(lambda: os.kill(int(sys.argv[1]), 15)))
+            """, arguments: [String(sleep.processIdentifier)])
+
+        XCTAssertEqual(output, "kill EPERM\n")
+        XCTAssertTrue(sleep.isRunning)
+    }
+
+    func testSandboxDeniesSystemServices() async throws {
+        let output = try await converter.runScript("""
+            import ctypes
+            system = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+            port = ctypes.c_uint(0)
+            bootstrap = ctypes.c_uint.in_dll(system, "bootstrap_port")
+            print("lookup", system.bootstrap_look_up(bootstrap, b"com.apple.cfprefsd.daemon", ctypes.byref(port)))
+            """)
+
+        XCTAssertTrue(output.hasPrefix("lookup "), output)
+        XCTAssertNotEqual(output, "lookup 0\n", "Python reached the preferences daemon")
+    }
+
+    func testPythonIsIsolatedWithAMinimalEnvironment() async throws {
+        let output = try await converter.runScript("""
+            import os, sys
+            print(sys.flags.isolated, sys.dont_write_bytecode)
+            print(" ".join(sorted(os.environ)))
+            """)
+
+        XCTAssertEqual(output.split(separator: "\n"), [
+            "1 True",
+            "HOME LANG PATH PYTHONDONTWRITEBYTECODE PYTHONIOENCODING TMPDIR",
+        ], output)
+    }
+
+    /// In the app, `Helpers/markitdown` is a link to `Resources/markitdown`.
+    func testRunsThePythonOfARuntimeReachedThroughALink() async throws {
+        let helpers = folder.appendingPathComponent("Odd \"Helpers\"", isDirectory: true)
+        try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+        let link = helpers.appendingPathComponent("markitdown")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: Self.runtime)
+        converter.pythonURL = link.appendingPathComponent("bin/python3")
+
+        let markdown = try await converter.markdown(forFile: documents.appendingPathComponent("page.html"))
+
+        XCTAssertTrue(markdown.contains("# Harbour Report"), markdown)
+    }
+
     // MARK: - PDF fallback
 
     func testPDFWithoutTextUsesTheFallback() async throws {
@@ -216,6 +386,71 @@ final class DocumentConverterTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// The sandbox before it denied starting processes, for tests of what the run must survive if
+    /// Python could.
+    private static let forkingProfile = """
+        (version 1)
+        (allow default)
+        (deny network*)
+        (deny file-write*)
+        (allow file-write* (subpath (param "WORK_DIR")) (literal "/dev/null"))
+        """
+
+    /// Python's `attempt(action)`: "allowed", or the name of the errno it failed with.
+    private static let attempt = """
+        import errno, os, sys
+        def attempt(action):
+            try:
+                action()
+                return "allowed"
+            except OSError as error:
+                return errno.errorcode.get(error.errno, repr(error))
+
+        """
+
+    /// Forks a child that leaves Python's process group and sleeps for 30 s with the output open,
+    /// prints its pid, and exits after `seconds`.
+    private static func leaveAProcessHoldingTheOutput(exitAfter seconds: Double) -> String {
+        """
+        import os, sys, time
+        child = os.fork()
+        if child == 0:
+            os.setsid()
+            time.sleep(30)
+            os._exit(0)
+        print(child)
+        sys.stdout.flush()
+        time.sleep(\(seconds))
+        """
+    }
+
+    private static func waitForLaunch(_ launch: OSAllocatedUnfairLock<(pid: pid_t, directory: URL)?>) async throws -> (pid_t, URL) {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            if let launched = launch.withLock({ $0 }) {
+                // Python is past its start-up and asleep.
+                try await Task.sleep(for: .milliseconds(500))
+                return launched
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        return try XCTUnwrap(launch.withLock { $0 }, "Python did not start within 10 s")
+    }
+
+    /// Waits up to 3 s for `pid` to be gone.
+    private static func assertGone(_ pid: pid_t, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while ContinuousClock.now < deadline, Darwin.kill(pid, 0) == 0 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNotEqual(Darwin.kill(pid, 0), 0, "Process \(pid) is still running", file: file, line: line)
+    }
+
+    /// Waits up to 3 s for everything in process group `group` to be gone.
+    private static func assertGroupGone(_ group: pid_t, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while ContinuousClock.now < deadline, killpg(group, 0) == 0 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNotEqual(killpg(group, 0), 0, "Something in process group \(group) is still running", file: file, line: line)
+    }
 
     /// Every file and folder under `directory` with its size and modification date.
     private static func listing(of directory: URL) throws -> [String: String] {
