@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreML
 import Foundation
 import PDFKit
 import Vision
@@ -28,33 +29,41 @@ public enum PDFTextRecognizer {
         return false
     }
 
-    /// OCRs up to `maxPages` pages, in order. With more than one page each starts with `<!-- page N -->`.
+    /// OCRs up to `maxPages` pages, in order. With more than one page each starts with `<!-- page N -->`;
+    /// when pages were left out, the Markdown ends with `<!-- stopped after N of M pages -->`.
+    /// Renders with CoreGraphics alone, not PDFKit: PDFKit brings up AppKit, which reaches for the
+    /// window server and the Dock, and the OCR helper's sandbox has neither.
     public static func markdown(fromPDF url: URL, maxPages: Int = 300) async throws -> String {
-        guard let document = PDFDocument(url: url), !document.isLocked, document.pageCount > 0 else {
+        guard let document = CGPDFDocument(url as CFURL), document.isUnlocked, document.numberOfPages > 0 else {
             throw PDFTextRecognizerError.unreadable
         }
-        let count = min(document.pageCount, max(maxPages, 0))
-        let labelled = document.pageCount > 1
+        let pageCount = document.numberOfPages
+        let count = min(pageCount, max(maxPages, 0))
+        let labelled = pageCount > 1
         var pages: [String] = []
         var recognisedAny = false
         for index in 0..<count {
             if Task.isCancelled { throw CancellationError() }
             let text: String = try autoreleasepool {
-                guard let page = document.page(at: index), let image = render(page) else { return "" }
+                // CGPDFDocument numbers pages from 1.
+                guard let page = document.page(at: index + 1), let image = render(page) else { return "" }
                 return try recognise(image)
             }
             if !text.isEmpty { recognisedAny = true }
             pages.append(labelled ? "<!-- page \(index + 1) -->\n\n\(text)" : text)
         }
         guard recognisedAny else { throw PDFTextRecognizerError.noText }
+        if count < pageCount {
+            pages.append("<!-- stopped after \(count) of \(pageCount) pages -->")
+        }
         return pages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n") + "\n"
     }
 
     // MARK: Rendering
 
-    private static func render(_ page: PDFPage) -> CGImage? {
-        let box = page.bounds(for: .cropBox)
-        let rotated = page.rotation % 180 != 0
+    private static func render(_ page: CGPDFPage) -> CGImage? {
+        let box = page.getBoxRect(.cropBox)
+        let rotated = page.rotationAngle % 180 != 0
         let pointSize = rotated ? CGSize(width: box.height, height: box.width) : box.size
         guard pointSize.width > 0, pointSize.height > 0 else { return nil }
         let scale = min(renderDPI / 72, maxPixelSide / max(pointSize.width, pointSize.height))
@@ -68,7 +77,11 @@ public enum PDFTextRecognizer {
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         context.interpolationQuality = .high
         context.scaleBy(x: CGFloat(width) / pointSize.width, y: CGFloat(height) / pointSize.height)
-        page.draw(with: .cropBox, to: context)
+        // At the page's own size the transform only rotates the crop box and moves it into place.
+        context.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: pointSize),
+                                                     rotate: 0, preserveAspectRatio: true))
+        context.clip(to: box)
+        context.drawPDFPage(page)
         return context.makeImage()
     }
 
@@ -84,6 +97,7 @@ public enum PDFTextRecognizer {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.automaticallyDetectsLanguage = true
+        try useCPUOnly(request)
         try VNImageRequestHandler(cgImage: image).perform([request])
         let lines = (request.results ?? []).compactMap { observation -> Line? in
             guard let text = observation.topCandidates(1).first?.string,
@@ -92,6 +106,16 @@ public enum PDFTextRecognizer {
             return Line(text: text, box: observation.boundingBox)
         }
         return paragraphs(from: lines)
+    }
+
+    /// Runs every stage of `request` on the CPU, to keep the GPU's IOKit user client out of the
+    /// OCR helper's sandbox. (On macOS 27 the accurate text detector still compiles and runs its
+    /// model on the Neural Engine whatever is set here.)
+    private static func useCPUOnly(_ request: VNRequest) throws {
+        for (stage, devices) in try request.supportedComputeStageDevices {
+            guard let cpu = devices.first(where: { if case .cpu = $0 { true } else { false } }) else { continue }
+            request.setComputeDevice(cpu, for: stage)
+        }
     }
 
     /// Orders lines top to bottom then left to right, and starts a new paragraph at a vertical gap
@@ -126,11 +150,14 @@ public enum PDFTextRecognizer {
         return paragraphs.map { escapeLineStart($0.joined(separator: " ")) }.joined(separator: "\n\n")
     }
 
-    /// Stops OCR text from turning into headings, lists or quotes.
+    /// Stops OCR text from turning into headings, lists, quotes, HTML, table rows or code fences
+    /// (a fence would swallow every later page).
     static func escapeLineStart(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         guard let first = trimmed.first else { return trimmed }
-        if "#-*+>".contains(first) { return "\\" + trimmed }
+        if "#-*+><|".contains(first) || trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+            return "\\" + trimmed
+        }
         let digits = trimmed.prefix { $0.isASCII && $0.isNumber }
         if !digits.isEmpty {
             let rest = trimmed.dropFirst(digits.count)

@@ -1,5 +1,6 @@
 import Foundation
 import os
+import PageCaptureOCRKit
 
 public enum DocumentConversionError: Error, Equatable {
     /// The bundled Python is not where it should be (e.g. running from `swift run` without a built app).

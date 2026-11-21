@@ -3,7 +3,7 @@ import CoreText
 import Foundation
 import Testing
 
-@testable import PageCaptureCore
+@testable import PageCaptureOCRKit
 
 @Suite struct PDFTextRecognizerTests {
     /// A text block: lines drawn at a y offset from the top of the page (points, 612 x 792).
@@ -128,6 +128,15 @@ import Testing
         #expect(PDFTextRecognizer.escapeLineStart("plain") == "plain")
     }
 
+    /// A fence would swallow every later page; HTML and table rows would not read as text.
+    @Test func escapesFencesHTMLAndTableRows() {
+        #expect(PDFTextRecognizer.escapeLineStart("```swift") == "\\```swift")
+        #expect(PDFTextRecognizer.escapeLineStart("~~~ code") == "\\~~~ code")
+        #expect(PDFTextRecognizer.escapeLineStart("<div>") == "\\<div>")
+        #expect(PDFTextRecognizer.escapeLineStart("| a | b |") == "\\| a | b |")
+        #expect(PDFTextRecognizer.escapeLineStart("a ``` b") == "a ``` b")
+    }
+
     @Test func detectsTextLayer() {
         let scanned = Self.scannedPDF([[Block(lines: ["Scanned only"], top: 100)]])
         let text = Self.textPDF("Real text layer")
@@ -164,5 +173,13 @@ import Testing
         #expect(output.contains("alpha"))
         #expect(!output.contains("beta"))
         #expect(!output.contains("<!-- page 2 -->"))
+        #expect(output.hasSuffix("<!-- stopped after 1 of 2 pages -->\n"))
+    }
+
+    @Test func noTruncationNoteWhenAllPagesAreRead() async throws {
+        let url = Self.scannedPDF([[Block(lines: ["Only page gamma"], top: 100)]])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let output = try await PDFTextRecognizer.markdown(fromPDF: url, maxPages: 1)
+        #expect(!output.contains("stopped after"))
     }
 }

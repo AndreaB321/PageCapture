@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import os
 import XCTest
 @testable import PageCaptureCore
@@ -364,12 +365,12 @@ final class DocumentConverterTests: XCTestCase {
     }
 
     func testScannedPDFIsReadByOCRByDefault() async throws {
-        let scan = PDFTextRecognizerTests.scannedPDF([[.init(lines: ["PageCapture reads scanned pages"], top: 120)]])
-        defer { try? FileManager.default.removeItem(at: scan) }
+        let scan = folder.appendingPathComponent("scan.pdf")
+        try Self.writeScannedPDF(line: "PageCapture reads scanned pages", to: scan)
 
         let markdown = try await DocumentConverter(pythonURL: Self.python).markdown(forFile: scan)
 
-        XCTAssertTrue(PDFTextRecognizerTests.normalised(markdown).contains("pagecapture reads scanned pages"), markdown)
+        XCTAssertTrue(markdown.lowercased().contains("pagecapture reads scanned pages"), markdown)
     }
 
     func testPDFWithTextDoesNotUseTheFallback() async throws {
@@ -462,6 +463,28 @@ final class DocumentConverterTests: XCTestCase {
             listing[url.path] = "\(values.fileSize ?? -1) \(values.contentModificationDate?.timeIntervalSince1970 ?? -1)"
         }
         return listing
+    }
+
+    /// A one-page PDF whose only content is a picture of `line` in black on white: a scan.
+    private static func writeScannedPDF(line: String, to url: URL) throws {
+        let size = CGSize(width: 612, height: 792), scale: CGFloat = 4
+        let bitmap = try XCTUnwrap(CGContext(
+            data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        bitmap.setFillColor(gray: 1, alpha: 1)
+        bitmap.fill(CGRect(x: 0, y: 0, width: bitmap.width, height: bitmap.height))
+        bitmap.scaleBy(x: scale, y: scale)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 22, nil)
+        let text = NSAttributedString(string: line, attributes: [.font: font, .foregroundColor: CGColor(gray: 0, alpha: 1)])
+        bitmap.textPosition = CGPoint(x: 50, y: 650)
+        CTLineDraw(CTLineCreateWithAttributedString(text), bitmap)
+        let image = try XCTUnwrap(bitmap.makeImage())
+        var box = CGRect(origin: .zero, size: size)
+        let pdf = try XCTUnwrap(CGContext(url as CFURL, mediaBox: &box, nil))
+        pdf.beginPDFPage(nil)
+        pdf.draw(image, in: box)
+        pdf.endPDFPage()
+        pdf.closePDF()
     }
 
     /// A one-page PDF with a filled rectangle and no text, like a scan.

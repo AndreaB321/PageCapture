@@ -4,9 +4,15 @@ import PackageDescription
 let package = Package(
     name: "PageCapture",
     platforms: [.macOS(.v14)],
+    products: [
+        /// Shipped in `Contents/Helpers`; `DocumentConverter` runs it sandboxed to OCR scanned PDFs.
+        .executable(name: "pagecapture-ocr", targets: ["PageCaptureOCR"]),
+    ],
     targets: [
         .target(
             name: "PageCaptureCore",
+            // Interim: the in-process OCR fallback, until DocumentConverter runs pagecapture-ocr.
+            dependencies: ["PageCaptureOCRKit"],
             resources: [
                 .copy("Resources/merge.js"), .copy("Resources/capture.js"),
                 .copy("Resources/markdown.js"), .copy("Resources/document.js"),
@@ -27,10 +33,21 @@ let package = Package(
             name: "ManualShots",
             dependencies: ["PageCaptureCore", "PageCaptureUI"]
         ),
+        /// Vision OCR of scanned PDFs. Only the `pagecapture-ocr` helper links it: PDFs are never
+        /// decoded in the app's own process.
+        .target(name: "PageCaptureOCRKit"),
+        .executableTarget(
+            name: "PageCaptureOCR",
+            dependencies: ["PageCaptureOCRKit"]
+        ),
         .testTarget(
             name: "PageCaptureCoreTests",
             dependencies: ["PageCaptureCore"],
             resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "PageCaptureOCRKitTests",
+            dependencies: ["PageCaptureOCRKit"]
         ),
         .testTarget(
             name: "PageCaptureUITests",
