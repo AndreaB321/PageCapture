@@ -2,7 +2,8 @@
 
 PageCapture's own code is under the MIT licence (see [LICENSE](LICENSE)). To save videos, the app
 also ships third-party programs in `PageCapture.app/Contents/Helpers/`: ffmpeg, ffprobe, yt-dlp,
-Deno and a Python runtime with MarkItDown (for Markdown conversion of documents). PageCapture runs them as separate programs and does not link them into its own code.
+Deno and a Python runtime with MarkItDown (for Markdown conversion of documents). PageCapture runs
+them as separate programs and does not link them into its own code.
 Each one keeps its own licence, described below.
 
 - **Licence texts**: in the app at `PageCapture.app/Contents/Resources/ThirdPartyNotices/`, with this
@@ -102,8 +103,9 @@ All versions and checksums are pinned in `scripts/tool-pins.sh`.
 - **What PageCapture ships**: `Contents/Helpers/markitdown`, a relocatable CPython 3.13.18
   (python-build-standalone release 20261110, `install_only_stripped` build for aarch64, SHA-256
   `7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540`) with MarkItDown and the
-  Python packages it needs, installed from the official PyPI wheels, unmodified. The 37 wheels and
-  their SHA-256s are listed in `scripts/markitdown-requirements.txt`. pip, IDLE, Tk and the packages'
+  Python packages it needs, installed from the official PyPI wheels, unmodified except for compiled
+  bytecode (every module is precompiled) and an ad-hoc re-signature of their native libraries. The
+  37 wheels and their SHA-256s are listed in `scripts/markitdown-requirements.txt`. pip, IDLE, Tk and the packages'
   test suites are left out. It runs as a separate process.
 - **Licence**: MarkItDown is under the MIT licence. Python is under the PSF licence 2.0. Each
   component keeps its own licence, as listed below.
@@ -140,17 +142,33 @@ All versions and checksums are pinned in `scripts/tool-pins.sh`.
   | MPL-2.0 | certifi 2026.11.20 |
 
   Each wheel's own licence text is in `MarkItDown-<component>-<version>.txt`.
-- **libiconv in lxml**: the lxml wheel (`lxml/etree`, `lxml/objectify`) statically links GNU libiconv
-  1.18, under the **GNU Lesser General Public License version 2.1**. The sources bundle contains
-  `libiconv-1.18.tar.gz` (unmodified, from <https://ftp.gnu.org/pub/gnu/libiconv/>) and
-  `lxml-6.1.3.tar.gz`, whose `buildlibxml.py` builds lxml's static libraries.
-- **Using your own libiconv**: build lxml 6.1.3 from that sdist with `--static-deps`, with
-  `--download-dir` pointing at a directory that holds your `libiconv-<version>.tar.gz` and
-  `--libiconv-version` set to match. Replace `Contents/Helpers/markitdown/lib/python3.13/site-packages/lxml`
-  with the result, then re-sign the app (`codesign --force -s - ` for each changed file, then for
-  `PageCapture.app`).
-- **Source**: the sources bundle contains libiconv and lxml as above. The sources of Python (at
-  python-build-standalone's pinned versions) and of the other packages are published by those projects
-  (<https://www.python.org/downloads/>, <https://pypi.org>).
+- **C libraries in lxml**: the lxml wheel (`lxml/etree`, `lxml/objectify`) statically links GNU libiconv
+  1.18, under the **GNU Lesser General Public License version 2.1**, and also libxml2 2.14.6 and
+  libxslt 1.1.43 (MIT) and zlib 1.3.2 (zlib licence). The sources bundle contains `libiconv-1.18.tar.gz`
+  (from <https://ftp.gnu.org/pub/gnu/libiconv/>), `libxml2-2.14.6.tar.xz`, `libxslt-1.1.43.tar.xz`
+  (from <https://download.gnome.org/sources/>), `zlib-1.3.2.tar.gz` (from <https://zlib.net/fossils/>),
+  all unmodified, and `lxml-6.1.3.tar.gz`, whose `buildlibxml.py` builds lxml's static libraries.
+- **Using your own libiconv (or libxml2, libxslt, zlib)**: unpack the sdist from the sources bundle
+  and the tarballs into one directory, replacing the one you changed with yours, then build lxml from
+  inside the sdist, without network:
+
+  ```sh
+  python3 setup.py build_ext --static-deps --download-dir <directory with the four tarballs> \
+      --libxml2-version 2.14.6 --libxslt-version 1.1.43 --zlib-version 1.3.2 --libiconv-version 1.18
+  ```
+
+  Set the `--*-version` options to the versions of your own tarballs. Then replace
+  `Contents/Resources/markitdown/lib/python3.13/site-packages/lxml` (`Contents/Helpers/markitdown` is
+  a symlink to it) with the built package, and precompile it, because the runtime's bytecode is
+  checked by hash never and the old bytecode would otherwise stay in use:
+
+  ```sh
+  python3 -I -m compileall -q -f --invalidation-mode unchecked-hash <site-packages>/lxml
+  ```
+
+  Last, re-sign: `codesign --force -s -` on each changed `.so` file, then on `PageCapture.app`.
+- **Source**: the sources bundle contains libiconv, libxml2, libxslt, zlib and lxml as above. The
+  sources of Python (at python-build-standalone's pinned versions) and of the other packages are
+  published by those projects (<https://www.python.org/downloads/>, <https://pypi.org>).
 - **Texts**: `MarkItDown.txt` (what is shipped), `MarkItDown-<component>-<version>.txt` for every
   component, `LGPL-2.1.txt`.

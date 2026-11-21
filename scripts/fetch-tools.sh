@@ -156,19 +156,25 @@ PageCapture.app/Contents/Helpers/markitdown is CPython $PBS_PYTHON_VERSION from
 python-build-standalone release $PBS_RELEASE (https://github.com/astral-sh/python-build-standalone),
 file $PBS_NAME-install_only_stripped.tar.gz (SHA-256 $PBS_SHA256),
 with Microsoft MarkItDown $MARKITDOWN_VERSION (MIT, https://github.com/microsoft/markitdown) and the
-Python packages it needs installed from the official PyPI wheels, unmodified. The list of wheels
-and their SHA-256s is scripts/markitdown-requirements.txt in the PageCapture repository.
-pip, IDLE, Tk and the packages' test suites are left out, and every module is precompiled.
+Python packages it needs installed from the official PyPI wheels, unmodified except for compiled
+bytecode (every module is precompiled) and an ad-hoc re-signature of their native libraries. The list
+of wheels and their SHA-256s is scripts/markitdown-requirements.txt in the PageCapture repository.
+pip, IDLE, Tk and the packages' test suites are left out.
 
 Each component's licence is in MarkItDown-<component>-<version>.txt next to this file
 (MarkItDown-Python-$PBS_PYTHON_VERSION.txt for Python and the libraries built into it).
 
 The lxml wheel (lxml/etree and lxml/objectify) contains GNU libiconv $LIBICONV_VERSION, linked
-statically, under the GNU Lesser General Public License version 2.1 (LGPL-2.1.txt). The
-PageCapture sources bundle has libiconv-$LIBICONV_VERSION.tar.gz and lxml-$LXML_VERSION.tar.gz, whose
-buildlibxml.py builds lxml against a given libiconv. To use a modified libiconv, build lxml with
-it and replace Contents/Helpers/markitdown/lib/python$MD_PY/site-packages/lxml, then re-sign the
-app (codesign --force -s - for each changed file, then for PageCapture.app).
+statically, under the GNU Lesser General Public License version 2.1 (LGPL-2.1.txt), and also libxml2
+$LIBXML2_VERSION and libxslt $LIBXSLT_VERSION (MIT) and zlib $ZLIB_VERSION (zlib licence). The PageCapture
+sources bundle has their tarballs and lxml-$LXML_VERSION.tar.gz, whose buildlibxml.py builds lxml against
+them. To use a modified one, build lxml from that sdist with
+  python3 setup.py build_ext --static-deps --download-dir <directory with the tarballs> \\
+    --libxml2-version V --libxslt-version V --zlib-version V --libiconv-version V
+and replace Contents/Resources/markitdown/lib/python$MD_PY/site-packages/lxml with the result
+(Contents/Helpers/markitdown is a symlink to it). Precompile it with
+  python3 -I -m compileall -q -f --invalidation-mode unchecked-hash <site-packages>/lxml
+then re-sign: codesign --force -s - on each changed .so file, then on PageCapture.app.
 EOF
 
 if [[ "$ONLY" == markitdown ]]; then
