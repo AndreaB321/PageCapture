@@ -42,7 +42,8 @@
   <div id="f7" role="tabpanel" aria-busy="true" hidden><p>Stale busy text.</p></div>
 </section>
 
-<!-- Progress meters with a value: fixed amounts, not loads. -->
+<!-- Progress meters with a value: fixed amounts, not loads. Each comes with its panel's content when
+     the tab is selected (so it is not one the panel held before the click). -->
 <section data-case="progress">
   <h2>Progress tabs</h2>
   <div role="tablist">
@@ -51,10 +52,9 @@
     <button role="tab" aria-controls="p2" aria-selected="false">Progress Bar</button>
   </div>
   <div id="p0" role="tabpanel"><p>Progress ready text.</p></div>
-  <div id="p1" role="tabpanel" hidden><p>Course progress.</p><progress value="40" max="100">40%</progress></div>
-  <div id="p2" role="tabpanel" hidden>
-    <p>Rating.</p><div class="bar" role="progressbar" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100"></div>
-  </div>
+  <div id="p1" role="tabpanel" hidden data-fill='<p>Course progress.</p><progress value="40" max="100">40%</progress>'></div>
+  <div id="p2" role="tabpanel" hidden
+    data-fill='<p>Rating.</p><div class="bar" role="progressbar" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100"></div>'></div>
 </section>
 
 <!-- Classes naming a finished state, a wrapper or a part that loads something, not a load. -->
@@ -73,7 +73,8 @@
   </div>
 </section>
 
-<!-- A clock that changes every 100 ms in a panel that is filled at once. -->
+<!-- A stopwatch that changes every 10 ms (before the collector's first look at the panel) in a panel
+     that is filled at once. -->
 <section data-case="clock">
   <h2>Clock tabs</h2>
   <div role="tablist">
@@ -81,7 +82,7 @@
     <button role="tab" aria-controls="k1" aria-selected="false" data-clock>Clock Live</button>
   </div>
   <div id="k0" role="tabpanel"><p>Clock ready text.</p></div>
-  <div id="k1" role="tabpanel" hidden><p>Live clock text.</p><span class="clock">00.0</span></div>
+  <div id="k1" role="tabpanel" hidden><p>Live clock text.</p><span class="clock">00.00</span></div>
 </section>
 
 <h2 id="next">Next section</h2>
@@ -100,7 +101,7 @@
     }
   });
 
-  // Ticks every 100 ms on a message loop, not a timer (the test window holds timers back), while `tab` is selected.
+  // Ticks every 10 ms on a message loop, not a timer (the test window holds timers back), while `tab` is selected.
   function runClock(tab, clock) {
     const start = performance.now();
     let last = start;
@@ -108,9 +109,9 @@
     channel.port1.onmessage = () => {
       if (tab.getAttribute('aria-selected') !== 'true') return channel.port1.close();
       const now = performance.now();
-      if (now - last >= 100) {
+      if (now - last >= 10) {
         last = now;
-        clock.textContent = (((now - start) / 1000) % 60).toFixed(1).padStart(4, '0');
+        clock.textContent = (((now - start) / 1000) % 60).toFixed(2).padStart(5, '0');
       }
       channel.port2.postMessage(0);
     };
@@ -127,6 +128,7 @@
           document.getElementById(o.getAttribute('aria-controls')).hidden = o !== t;
         }
         const panel = document.getElementById(t.getAttribute('aria-controls'));
+        if (panel.dataset.fill) panel.innerHTML = panel.dataset.fill;
         if (t.hasAttribute('data-clock')) runClock(t, panel.querySelector('.clock'));
       });
     }

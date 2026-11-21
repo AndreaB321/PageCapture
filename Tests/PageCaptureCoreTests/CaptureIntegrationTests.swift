@@ -367,10 +367,11 @@ final class CaptureIntegrationTests: XCTestCase {
         assertInOrder(content.html, [#"id="sp3""#, "Reviews", "Whiskey late reviews text.", "Slow sections"])
     }
 
-    /// No loading indicator and never empty: only its content growing, part by part, keeps the wait going.
+    /// No loading indicator and never empty: only its content growing, part by part, keeps the wait
+    /// going, past the collector's first look at the panel (which the test window may delay by a second).
     func testWaitsWhileAPanelsContentKeepsGrowing() async throws {
         let content = try await captureSlowPanels()
-        assertInOrder(content.html, [#"id="sp4""#, "Stream part 1.", "Stream part 5.", "Stream part 9.", "Slow sections"])
+        assertInOrder(content.html, [#"id="sp4""#, "Stream part 1.", "Stream part 13.", "Stream part 25.", "Slow sections"])
     }
 
     /// The page replaces a tab's panel, or inserts an accordion's panel, when it is clicked.
@@ -401,6 +402,7 @@ final class CaptureIntegrationTests: XCTestCase {
         ])
     }
 
+    /// Meters that come with the panel's content on the click, so not ignored as held before it.
     func testProgressMetersWithAValueAddNoWait() async throws {
         try await assertNoPanelWait("progress", shows: ["Course progress.", "Rating."])
     }
@@ -409,6 +411,7 @@ final class CaptureIntegrationTests: XCTestCase {
         try await assertNoPanelWait("classes", shows: ["Loaded list.", "Loaded card.", "Wrapped text.", "Gallery text."])
     }
 
+    /// A stopwatch replacing its text every 10 ms: a change that adds nothing is not growth.
     func testClockTickingInAFilledPanelAddsNoWait() async throws {
         try await assertNoPanelWait("clock", shows: ["Live clock text."])
     }

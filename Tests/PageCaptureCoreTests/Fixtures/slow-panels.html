@@ -15,6 +15,7 @@
      after its tab was deselected or its section closed is dropped. -->
 <script>
   const LOAD_DELAY = 200;
+  const STREAM_PARTS = 25;
   // Runs `f` after `ms` on a message loop, not a timer: the test window holds timers back.
   function after(ms, f) {
     const at = performance.now() + ms;
@@ -30,7 +31,9 @@
 
 <!-- (a) Tabs: the second panel shows a busy spinner until its content arrives; the third has a
      heading at once and a loader shown only by its class (no aria-busy) until the rest arrives; the
-     fourth gets its content in parts, 100 ms apart, with no loading indicator; the fifth panel is
+     fourth gets its content in STREAM_PARTS parts, 100 ms apart, with no loading indicator (2.4 s in
+     all: longer than the test window holds back the collector's first look at the panel, up to about
+     a second, and shorter than its timeout); the fifth panel is
      replaced by a new element (same id) that shows a busy spinner until its content arrives. -->
 <h2>Slow tabs</h2>
 <div role="tablist">
@@ -90,7 +93,7 @@
         const part = (n) => after(100, () => {
           if (!selected(t)) return;
           panel.insertAdjacentHTML('beforeend', '<p>Stream part ' + n + '.</p>');
-          if (n < 9) part(n + 1);
+          if (n < STREAM_PARTS) part(n + 1);
         });
         part(2);
         return;
