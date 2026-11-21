@@ -19,8 +19,9 @@ jobs:
           path: |
             build/tools/markitdown
             build/tools-cache/markitdown.stamp
+            build/tools-cache/markitdown.tree
             build/notices
-          key: markitdown-${{ runner.os }}-${{ hashFiles('scripts/tool-pins.sh', 'scripts/markitdown-requirements.txt') }}
+          key: markitdown-${{ runner.os }}-${{ hashFiles('scripts/fetch-tools.sh', 'scripts/tool-pins.sh', 'scripts/markitdown-requirements.txt') }}
       - name: MarkItDown runtime
         run: |
           command -v zstd >/dev/null || brew install zstd

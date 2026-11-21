@@ -32,17 +32,47 @@ mkdir -p "$CACHE" "$TOOLS" "$NOTICES"
 MD_REQS=scripts/markitdown-requirements.txt
 MD_PY="${PBS_PYTHON_VERSION%.*}" # 3.13
 MD_STAMP="$CACHE/markitdown.stamp"
-MD_WANT="$PBS_NAME $PBS_SHA256 $(shasum -a 256 "$MD_REQS" | cut -d' ' -f1)"
+MD_TREE="$CACHE/markitdown.tree" # digest of the finished tree (md_tree_digest)
+# The stamp covers the recipe (this section of this script), every pin the section uses and the
+# requirements file, so a change to any of them rebuilds.
+MD_RECIPE="$(sed -n '/^# --- MarkItDown ---/,/^# GNU libiconv, inside lxml\./p' scripts/fetch-tools.sh | shasum -a 256 | cut -d' ' -f1)"
+MD_WANT="$PBS_NAME $PBS_SHA256 $PBS_FULL_SHA256 $(shasum -a 256 "$MD_REQS" | cut -d' ' -f1) $MD_RECIPE"
+MD_WANT+=" $MARKITDOWN_VERSION $LXML_VERSION $LIBICONV_VERSION $MAGIKA_VERSION $FLATBUFFERS_VERSION $COBBLE_VERSION"
+MD_WANT+=" $MARKITDOWN_LICENSE_SHA256 $MAGIKA_LICENSE_SHA256 $FLATBUFFERS_LICENSE_SHA256 $COBBLE_README_SHA256"
 MD_PY_NOTICE="$NOTICES/MarkItDown-Python-$PBS_PYTHON_VERSION.txt"
 
-if [[ -x "$TOOLS/markitdown/bin/python3" && -f "$MD_STAMP" && -f "$MD_PY_NOTICE" ]] \
+# Pins and the requirements file must agree; checked on every run, also when up to date.
+for pin in "markitdown==$MARKITDOWN_VERSION" "lxml==$LXML_VERSION" "magika==$MAGIKA_VERSION" \
+    "flatbuffers==$FLATBUFFERS_VERSION" "cobble==$COBBLE_VERSION"; do
+    grep -qxF "$pin \\" "$MD_REQS" || { echo "$MD_REQS has no $pin (tool-pins.sh)" >&2; exit 1; }
+done
+# lxml's wheel links GNU libiconv statically; the sources bundle carries LIBICONV_VERSION.
+check_libiconv() {
+    local iconv
+    iconv="$("$1/bin/python3" -I -B -c 'import ctypes, lxml.etree as e
+v = ctypes.c_int.in_dll(ctypes.CDLL(e.__file__), "_libiconv_version").value
+print(f"{v >> 8}.{v & 0xff}")')"
+    [[ "$iconv" == "$LIBICONV_VERSION" ]] \
+        || { echo "lxml links libiconv $iconv, tool-pins.sh says $LIBICONV_VERSION" >&2; exit 1; }
+}
+# Every distribution in the tree (pip excepted) has its notice.
+check_md_notices() {
+    local dist name
+    for dist in "$1"/lib/python"$MD_PY"/site-packages/*.dist-info; do
+        name="$(basename "$dist" .dist-info)"
+        [[ "$name" == pip-* || -s "$NOTICES/MarkItDown-$name.txt" ]] \
+            || { echo "No licence text for $name: add one to fetch-tools.sh" >&2; exit 1; }
+    done
+}
+
+if [[ -x "$TOOLS/markitdown/bin/python3" && -f "$MD_STAMP" && -f "$MD_TREE" && -f "$MD_PY_NOTICE" ]] \
     && [[ "$(cat "$MD_STAMP")" == "$MD_WANT" ]]; then
+    [[ "$(md_tree_digest "$TOOLS/markitdown")" == "$(cat "$MD_TREE")" ]] \
+        || { echo "$TOOLS/markitdown changed since it was built; delete it and rerun fetch-tools.sh markitdown" >&2; exit 1; }
+    check_md_notices "$TOOLS/markitdown"
+    check_libiconv "$TOOLS/markitdown"
     echo "markitdown $MARKITDOWN_VERSION (Python $PBS_PYTHON_VERSION): up to date"
 else
-    for pin in "markitdown==$MARKITDOWN_VERSION" "lxml==$LXML_VERSION" "magika==$MAGIKA_VERSION" \
-        "flatbuffers==$FLATBUFFERS_VERSION" "cobble==$COBBLE_VERSION"; do
-        grep -qxF "$pin \\" "$MD_REQS" || { echo "$MD_REQS has no $pin (tool-pins.sh)" >&2; exit 1; }
-    done
     command -v zstd >/dev/null || { echo "zstd is needed to unpack Python's licences (brew install zstd)" >&2; exit 1; }
     PY_TGZ="$PBS_NAME-install_only_stripped.tar.gz"
     PY_FULL="$PBS_NAME-pgo+lto-full.tar.zst"
@@ -52,7 +82,7 @@ else
     fetch "$PBS_URL/${PY_FULL//+/%2B}" "$CACHE/$PY_FULL" "$PBS_FULL_SHA256"
 
     WORK="$CACHE/markitdown-work"
-    rm -rf "$WORK" "$TOOLS/markitdown"
+    rm -rf "$WORK" "$TOOLS/markitdown" "$MD_STAMP" "$MD_TREE"
     mkdir -p "$WORK/full"
     tar -xzf "$CACHE/$PY_TGZ" -C "$WORK"
     zstd -dcq "$CACHE/$PY_FULL" | tar -xf - -C "$WORK/full" python/licenses
@@ -63,19 +93,14 @@ else
     echo "Installing markitdown $MARKITDOWN_VERSION into Python $PBS_PYTHON_VERSION"
     # The wheels for macOS 14 arm64 (the app's minimum), kept in the cache; pip checks each hash
     # while downloading and again while installing.
-    PIP=("$P/bin/python3" -I -m pip --disable-pip-version-check --no-cache-dir --quiet)
+    PIP=("$P/bin/python3" -I -m pip --isolated --disable-pip-version-check --no-cache-dir --quiet)
     "${PIP[@]}" download --require-hashes --no-deps --only-binary=:all: \
         --platform macosx_14_0_arm64 --python-version "$MD_PY" --implementation cp \
         --abi "cp${MD_PY/./}" -d "$CACHE/markitdown-wheels" -r "$MD_REQS"
     "${PIP[@]}" install --require-hashes --no-deps --only-binary=:all: --no-compile \
         --no-index --find-links "$CACHE/markitdown-wheels" -r "$MD_REQS"
 
-    # lxml's wheel links GNU libiconv statically; the sources bundle carries LIBICONV_VERSION.
-    ICONV="$("$P/bin/python3" -I -c 'import ctypes, lxml.etree as e
-v = ctypes.c_int.in_dll(ctypes.CDLL(e.__file__), "_libiconv_version").value
-print(f"{v >> 8}.{v & 0xff}")')"
-    [[ "$ICONV" == "$LIBICONV_VERSION" ]] \
-        || { echo "lxml links libiconv $ICONV, tool-pins.sh says $LIBICONV_VERSION" >&2; exit 1; }
+    check_libiconv "$P"
 
     # One notice per bundled distribution. Python: CPython and the libraries built into it (the
     # interpreter uses macOS's own zlib, libedit and ncurses).
@@ -116,17 +141,14 @@ print(f"{v >> 8}.{v & 0xff}")')"
         "$NOTICES/MarkItDown-flatbuffers-$FLATBUFFERS_VERSION.txt" "$FLATBUFFERS_LICENSE_SHA256"
     fetch "https://raw.githubusercontent.com/mwilliamson/python-cobble/$COBBLE_VERSION/README.rst" \
         "$NOTICES/MarkItDown-cobble-$COBBLE_VERSION.txt" "$COBBLE_README_SHA256"
-    for dist in "$SITE"/*.dist-info; do
-        name="$(basename "$dist" .dist-info)"
-        [[ "$name" == pip-* || -s "$NOTICES/MarkItDown-$name.txt" ]] \
-            || { echo "No licence text for $name: add one to fetch-tools.sh" >&2; exit 1; }
-    done
+    check_md_notices "$P"
 
     # Leave out what converting documents never uses: pip, IDLE, Tk, test suites. bin/ keeps only
     # the interpreter: the packages' entry-point scripts hard-code this build directory.
     rm -rf "$SITE"/pip "$SITE"/pip-*.dist-info "$LIB"/ensurepip "$LIB"/idlelib "$LIB"/tkinter \
         "$LIB"/turtledemo "$LIB"/turtle.py "$LIB"/lib-dynload/_tkinter.* \
-        "$P"/lib/libtcl* "$P"/lib/tcl9* "$P"/lib/tk9* "$P"/lib/itcl* "$P"/lib/thread*
+        "$P"/lib/libtcl* "$P"/lib/tcl9* "$P"/lib/tk9* "$P"/lib/itcl* "$P"/lib/thread* \
+        "$P"/include "$P"/share
     find "$SITE" -type d -name tests -prune -exec rm -rf {} +
     find "$P/bin" -mindepth 1 ! -name python ! -name python3 ! -name "python$MD_PY" -delete
     # Bytecode for every module, checked by hash never: Python then never writes __pycache__ into
@@ -144,6 +166,7 @@ extra = [m for m in ["pydub", "speech_recognition", "youtube_transcript_api", "a
 assert not extra, f"excluded packages installed: {extra}"'
     mv "$P" "$TOOLS/markitdown"
     rm -rf "$WORK"
+    md_tree_digest "$TOOLS/markitdown" >"$MD_TREE"
     echo "$MD_WANT" >"$MD_STAMP"
 fi
 # GNU libiconv, inside lxml.

@@ -108,3 +108,18 @@ check_pbs_published() {
         exit 1
     fi
 }
+
+# md_tree_digest DIR: one SHA-256 over every file (path relative to DIR, content) and symlink
+# (path, target) of DIR, so a changed, added or removed file changes it.
+md_tree_digest() {
+    (
+        cd "$1"
+        find . \( -type f -o -type l \) -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
+            if [[ -L "$f" ]]; then
+                printf '%s  link:%s\n' "$f" "$(readlink "$f")"
+            else
+                shasum -a 256 "$f"
+            fi
+        done | shasum -a 256 | cut -d' ' -f1
+    )
+}

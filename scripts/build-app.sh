@@ -30,6 +30,9 @@ done
 # The MarkItDown runtime, a Python tree: Helpers/markitdown/bin/python3 -m markitdown. It sits in
 # Resources, because codesign takes every file in Helpers for code and rejects the .py files;
 # Helpers/markitdown links to it.
+. scripts/tool-pins.sh
+[[ -f "$CACHE/markitdown.tree" && "$(md_tree_digest build/tools/markitdown)" == "$(cat "$CACHE/markitdown.tree")" ]] \
+    || { echo "build/tools/markitdown changed since it was built; delete it and rerun fetch-tools.sh markitdown" >&2; exit 1; }
 cp -R build/tools/markitdown "$APP/Contents/Resources/markitdown"
 ln -s ../Resources/markitdown "$APP/Contents/Helpers/markitdown"
 cp build/notices/* "$APP/Contents/Resources/ThirdPartyNotices/"
