@@ -206,7 +206,9 @@ final class PopupPresenter: NSObject, WKUIDelegate {
         /// Only a committed page changes the origin shown. A failed load leaves the last one; a
         /// same-document navigation (history.pushState, a #fragment) cannot change the origin.
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-            committedURL = webView.url
+            // The back-forward list's current item is the committed page: unlike `webView.url`, it
+            // cannot already name a navigation the page started right after this commit.
+            committedURL = webView.backForwardList.currentItem?.url ?? webView.url
             if let scheme = committedURL?.scheme?.lowercased(), scheme != "about", scheme != "data" {
                 creator = nil
             }
