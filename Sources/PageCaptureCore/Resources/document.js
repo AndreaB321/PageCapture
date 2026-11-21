@@ -62,14 +62,10 @@
       'p, li, h1, h2, h3, h4, h5, h6, figure, img, svg, video, tr, blockquote, pre, table' +
       ' { break-inside: avoid !important; }\n' +
       'h1, h2, h3, h4, h5, h6 { break-after: avoid !important; }\n' +
-      // Wide content fits the page: code lines wrap (keeping the monospace font and the line breaks), and
-      // table cells break their text anywhere, so a table lays out within the page width.
-      'pre { white-space: pre-wrap !important; overflow-wrap: anywhere !important; max-width: 100% !important;' +
-      ' box-sizing: border-box !important; }\n' +
-      'pre code, pre samp, pre kbd { white-space: inherit !important; overflow-wrap: inherit !important; }\n' +
+      // A table's text breaks anywhere only once the table overflows (see fitTables): `anywhere` changes the
+      // min-content width, so on a table that fits it would squeeze short columns to a letter per line.
       'table { max-width: 100% !important; }\n' +
-      'td, th { overflow-wrap: anywhere !important; }\n' +
-      'table[data-pc-wrap] :not(pre):not(pre *) { white-space: normal !important; }';
+      'table[data-pc-wrap] td, table[data-pc-wrap] th { overflow-wrap: anywhere !important; }';
   }
 
   // A play button over each video's preview, and a dark frame when there is no preview.
@@ -357,20 +353,44 @@
       if (size(title) < text) changes.push([title, { 'font-size': text + 'px' }]);
     }
     for (const [el, change] of changes) important(el, change);
+    wrapOverflowingText(right);
     fitTables(right);
     keepHeadingsWithNext(small);
   }
 
-  // A table whose cells still stick out of the page (text that must not wrap, fixed widths, wide
-  // images) first lets all its text wrap (`data-pc-wrap`), then, if it is still too wide, is scaled
-  // down to fit. Outer tables go first, so a nested one is measured after its parent changed.
+  // Text that must not wrap (`white-space: pre`, `nowrap`) and sticks out of the page wraps in print;
+  // `pre` becomes `pre-wrap`, so a code block keeps its indentation and line breaks. Tables are left to
+  // fitTables, which only touches a table that overflows.
+  const WRAPPED = { pre: 'pre-wrap', nowrap: 'normal' };
+  function wrapOverflowingText(right) {
+    const wide = [];
+    for (const el of document.body.querySelectorAll('*')) {
+      if (!WRAPPED[getComputedStyle(el).whiteSpace] || el.closest('table')) continue;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      if (range.getBoundingClientRect().right > right) wide.push(el);
+    }
+    for (const el of wide) {
+      important(el, { 'white-space': WRAPPED[getComputedStyle(el).whiteSpace], 'overflow-wrap': 'break-word' });
+    }
+  }
+
+  // A table whose cells, or the content that spills out of them, still stick out of the page (text that
+  // must not wrap, fixed widths, wide images) first lets all its text wrap (`data-pc-wrap`: break
+  // anywhere; `nowrap` text wraps, `pre` text wraps keeping its indentation and line breaks), then, if it
+  // is still too wide, is scaled down to fit. Outer tables go first, so a nested one is measured after
+  // its parent changed.
   function fitTables(right) {
     const overflow = (table) => {
-      // `max-width: 100%` can hold the table's own box at the page width while its cells overflow it.
+      // `max-width: 100%` can hold the table's own box at the page width while its cells overflow it, and
+      // with `table-layout: fixed` their content spills out of them.
       const box = table.getBoundingClientRect();
       let width = box.width;
       for (const cell of table.querySelectorAll('td, th')) {
-        width = Math.max(width, cell.getBoundingClientRect().right - box.left);
+        const range = document.createRange();
+        range.selectNodeContents(cell);
+        const edge = Math.max(cell.getBoundingClientRect().right, range.getBoundingClientRect().right);
+        width = Math.max(width, edge - box.left);
       }
       return { width, room: right - box.left };
     };
@@ -378,6 +398,10 @@
       let { width, room } = overflow(table);
       if (width <= 0 || room <= 0 || width <= room) continue;
       table.setAttribute('data-pc-wrap', '');
+      for (const el of [table, ...table.querySelectorAll('*')]) {
+        const wrapped = WRAPPED[getComputedStyle(el).whiteSpace];
+        if (wrapped) important(el, { 'white-space': wrapped });
+      }
       // Text does not shrink in proportion to `zoom` (minimum font size), so measure again each time.
       for (let attempt = 0; attempt < 4; attempt++) {
         ({ width, room } = overflow(table));

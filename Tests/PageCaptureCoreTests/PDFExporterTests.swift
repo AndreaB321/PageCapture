@@ -288,17 +288,36 @@ final class PDFExporterTests: XCTestCase {
         XCTAssertFalse(text.contains("INJECTED"))
     }
 
-    /// Prints `html` to an A4 PDF; every marker must be in its text and wholly inside the page's media box.
-    private func assertMarkersFitThePage(_ html: String, markers: [String], name: String,
-                                         file: StaticString = #filePath, line: UInt = #line) async throws {
+    /// Prints `html` to an A4 PDF.
+    private func printPDF(_ html: String, name: String) async throws -> PDFDocument {
         let content = CapturedContent(
             html: html, baseURL: URL(string: "pctest://main.test/docs/page.html")!, title: name,
             stylesheets: [], imageURLs: [])
         let url = folder.appendingPathComponent("\(name).pdf")
         try await PDFExporter.write(content, localImages: [:], to: url,
                                     configuration: Self.configuration(), paperSize: .a4)
+        return try XCTUnwrap(PDFDocument(url: url))
+    }
 
-        let pdf = try XCTUnwrap(PDFDocument(url: url), file: file, line: line)
+    private func bounds(of text: String, in pdf: PDFDocument,
+                        file: StaticString = #filePath, line: UInt = #line) throws -> CGRect {
+        let selection = try XCTUnwrap(pdf.findString(text, withOptions: []).first, "\(text) not found", file: file, line: line)
+        return selection.bounds(for: try XCTUnwrap(selection.pages.first, file: file, line: line))
+    }
+
+    private func fontSize(of text: String, in pdf: PDFDocument,
+                          file: StaticString = #filePath, line: UInt = #line) throws -> CGFloat {
+        let selection = try XCTUnwrap(pdf.findString(text, withOptions: []).first, "\(text) not found", file: file, line: line)
+        let font = selection.attributedString?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        return try XCTUnwrap(font, file: file, line: line).pointSize
+    }
+
+    /// Prints `html` to an A4 PDF; every marker must be in its text and wholly inside the printable area
+    /// (the media box inset by the page margin). With `bodyText`, the markers must also print at that
+    /// text's size: the content was wrapped, not scaled down.
+    private func assertMarkersFitThePage(_ html: String, markers: [String], name: String, bodyText: String? = nil,
+                                         file: StaticString = #filePath, line: UInt = #line) async throws {
+        let pdf = try await printPDF(html, name: name)
         let text = try XCTUnwrap(pdf.string, file: file, line: line)
         for marker in markers {
             XCTAssertTrue(text.contains(marker), "\(marker) is missing from the PDF text", file: file, line: line)
@@ -307,9 +326,14 @@ final class PDFExporterTests: XCTestCase {
                 XCTFail("\(marker) not found in the PDF", file: file, line: line)
                 continue
             }
-            let box = page.bounds(for: .mediaBox)
+            let area = page.bounds(for: .mediaBox).insetBy(dx: PDFExporter.margin, dy: PDFExporter.margin)
             let bounds = selection.bounds(for: page)
-            XCTAssertTrue(box.contains(bounds), "\(marker) at \(bounds) is outside the page \(box)", file: file, line: line)
+            XCTAssertTrue(area.contains(bounds), "\(marker) at \(bounds) is outside the printable area \(area)", file: file, line: line)
+            if let bodyText {
+                XCTAssertEqual(try fontSize(of: marker, in: pdf, file: file, line: line),
+                               try fontSize(of: bodyText, in: pdf, file: file, line: line), accuracy: 0.01,
+                               "\(marker) was scaled down", file: file, line: line)
+            }
         }
     }
 
@@ -335,14 +359,72 @@ final class PDFExporterTests: XCTestCase {
             }.joined()
         }.map { "<tr>\($0)</tr>" }.joined()
         let html = "<p>Intro</p><table border=\"1\"><tr>\(head)</tr>\(rows)</table>"
-        try await assertMarkersFitThePage(html, markers: ["H11", "ZEND"], name: "Table")
+        try await assertMarkersFitThePage(html, markers: ["H11", "ZEND"], name: "Table", bodyText: "Intro")
     }
 
     /// A page that forbids wrapping in its cells (`nowrap`) still prints whole: the text wraps in print.
     func testTableOfNoWrapCellsFitsThePageWidth() async throws {
         let cells = (0..<12).map { "<td>Unbreakable text \($0 == 11 ? "NWEND" : "N\($0)")</td>" }.joined()
-        let html = "<style>td { white-space: nowrap }</style><table border=\"1\"><tr>\(cells)</tr></table>"
-        try await assertMarkersFitThePage(html, markers: ["N0", "NWEND"], name: "NoWrap")
+        let html = "<style>td { white-space: nowrap }</style><p>Intro</p><table border=\"1\"><tr>\(cells)</tr></table>"
+        try await assertMarkersFitThePage(html, markers: ["N0", "NWEND"], name: "NoWrap", bodyText: "Intro")
+    }
+
+    /// A table that fits as it is lays out as on screen: a short word is not squeezed to a letter per line
+    /// by the rules that fit wide tables.
+    func testTableThatFitsKeepsItsShortColumnWhole() async throws {
+        let paragraph = String(repeating: "A long paragraph of ordinary words that fills its column. ", count: 30)
+        let html = """
+        <p>Intro</p>
+        <table border="1"><tr><td>Identification</td><td>\(paragraph)</td></tr></table>
+        """
+        let pdf = try await printPDF(html, name: "Fits")
+        XCTAssertEqual(pdf.findString("Identification", withOptions: []).count, 1)
+        XCTAssertLessThan(try bounds(of: "Identification", in: pdf).height,
+                          1.5 * (try bounds(of: "Intro", in: pdf).height), "Identification is split over lines")
+    }
+
+    /// A code block's line breaks and indentation survive wrapping its long line.
+    func testWrappedCodeBlockKeepsIndentationAndLineBreaks() async throws {
+        let words = (0..<40).map { "word\($0)" }.joined(separator: " ")
+        let html = "<pre>const wide = \"\(words)\"\n    INDENT_MARK\nFLUSH_MARK</pre>"
+        let pdf = try await printPDF(html, name: "Indent")
+        let indented = try bounds(of: "INDENT_MARK", in: pdf), flush = try bounds(of: "FLUSH_MARK", in: pdf)
+        XCTAssertGreaterThan(indented.minX, flush.minX + 10)
+        XCTAssertGreaterThan(indented.minY, flush.minY, "the marker lines run together")
+    }
+
+    /// A table of `white-space: pre` cells (a code listing) that overflows wraps its lines keeping the indentation.
+    func testOverflowingCodeTableKeepsIndentation() async throws {
+        let words = (0..<40).map { "word\($0)" }.joined(separator: " ")
+        let html = """
+        <p>Intro</p>
+        <table border="1"><tr><td style="white-space: pre; font: 16px monospace"><span>const wide = "\(words)"
+            INDENT_MARK
+        FLUSH_MARK</span></td></tr></table>
+        """
+        let pdf = try await printPDF(html, name: "CodeTable")
+        XCTAssertEqual(try fontSize(of: "INDENT_MARK", in: pdf), try fontSize(of: "Intro", in: pdf), accuracy: 0.01,
+                       "the table was scaled down")
+        let indented = try bounds(of: "INDENT_MARK", in: pdf), flush = try bounds(of: "FLUSH_MARK", in: pdf)
+        XCTAssertGreaterThan(indented.minX, flush.minX + 10)
+        XCTAssertGreaterThan(indented.minY, flush.minY, "the marker lines run together")
+    }
+
+    /// With `table-layout: fixed` a nowrap cell's text spills out of its box instead of widening the table.
+    func testFixedLayoutTableWithSpillingTextFitsThePageWidth() async throws {
+        let words = (0..<30).map { "spill\($0)" }.joined(separator: " ")
+        let html = """
+        <table border="1" style="table-layout: fixed; width: 100%"><tr>
+        <td style="white-space: nowrap">\(words) FIXEND</td><td>Other</td></tr></table>
+        """
+        try await assertMarkersFitThePage(html, markers: ["FIXEND"], name: "Fixed")
+    }
+
+    /// Code in a box that is not a `pre` and not in a table wraps too.
+    func testPreformattedDivWrapsInsteadOfBeingCut() async throws {
+        let words = (0..<40).map { "word\($0)" }.joined(separator: " ")
+        let html = "<div style=\"white-space: pre; font-family: monospace\">const wide = \"\(words) DIVEND\"</div>"
+        try await assertMarkersFitThePage(html, markers: ["DIVEND"], name: "Div")
     }
 
     /// Fixed-width inline blocks do not shrink or wrap: a table of them is scaled down to the page, text in
