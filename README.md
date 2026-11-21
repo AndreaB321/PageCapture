@@ -190,6 +190,10 @@ To capture a page that needs an account, sign in inside PageCapture's own window
 browser. PageCapture keeps that sign-in for next time. It does not use the sign-ins of Safari or
 Chrome.
 
+Sign-in pop-ups, such as "Sign in with Google", open in a small window of their own and close
+themselves when you are done. Links that would open a new window open in the PageCapture window
+instead; Back returns to the page before.
+
 When saving videos from YouTube or Vimeo, only that site's own cookies are passed to the download
 tool, in a private temporary file that is deleted straight away. Nothing temporary is written into
 your capture folder.
@@ -213,7 +217,6 @@ your capture folder.
   move the capture folder. The HTML and Markdown links keep working because they are relative.
 - A tab or section that takes a long time to load its content after a click may be saved empty.
 - Very wide tables or code blocks are cut at the right margin of the PDF.
-- Pop-up windows for signing in and links that open a new window are not supported yet.
 - Quitting during a save stops the download tools and cleans up first.
 
 ## Build from source

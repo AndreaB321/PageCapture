@@ -13,6 +13,8 @@ public final class CaptureController {
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var collected: CapturedContent?
     @ObservationIgnored private let navigationDelegate = NavigationDelegate()
+    /// The web view's UI delegate: new windows and pop-ups (which are never capture targets).
+    @ObservationIgnored let popupPresenter: PopupPresenter
     /// Bumped when a collection is aborted, so its late result is ignored.
     @ObservationIgnored private var collectionGeneration = 0
 
@@ -32,6 +34,8 @@ public final class CaptureController {
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         bridge.webView = webView
+        popupPresenter = PopupPresenter(mainWebView: webView)
+        webView.uiDelegate = popupPresenter
         bridge.onPick = { [weak self] target in self?.send(.picked(target)) }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }

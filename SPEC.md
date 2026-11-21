@@ -7,6 +7,15 @@ area inside it, and saves it as PDF and/or Markdown with the images saved separa
 
 - The app has its own browser window (WKWebView) with an address bar. The user pastes a URL or
   signs in there. Cookies persist between launches (default persistent website data store).
+- Links and scripts that open a new window without asking for a window shape (`target="_blank"`,
+  `window.open(url)` without window features) load in the same window, like any other link: Back
+  returns to the page before, and a capture in progress ends.
+- Pop-ups (`window.open` with window features, or of a blank page), such as "Sign in with
+  Google/Apple/Microsoft", open in a small window of their own, sized as the page asks, and keep
+  their link to the page that opened them. They close when the page closes them, when the user
+  closes them, or when the main window closes. They share the browser's cookies, so a sign-in
+  done in a pop-up persists. JavaScript alert, confirm and prompt dialogs are shown. A pop-up is
+  never a capture target: picking and capturing only ever work in the main window's page.
 - Content is read from the DOM, not from screenshots, so text, links and original images survive.
   Script runs in every frame, including cross-origin iframes.
 
