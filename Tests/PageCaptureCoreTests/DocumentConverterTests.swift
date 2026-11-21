@@ -74,6 +74,75 @@ final class DocumentConverterTests: XCTestCase {
         }
     }
 
+    func testFailureMessageHasNoTracebackAndNoPaths() async throws {
+        do {
+            _ = try await converter.markdown(forFile: documents.appendingPathComponent("corrupt.docx"))
+            XCTFail("Converted a corrupt DOCX")
+        } catch let DocumentConversionError.failed(_, message) {
+            XCTAssertTrue(message.contains("FileConversionException"), message)
+            XCTAssertFalse(message.contains("Traceback"), message)
+            XCTAssertFalse(message.contains("/Users/"), message)
+            XCTAssertFalse(message.contains(Self.runtime.resolvingSymlinksInPath().path), message)
+            XCTAssertFalse(message.contains(Self.runtime.path), message)
+            XCTAssertFalse(message.contains("PageCapture-DocumentConverter-"), message)
+        }
+    }
+
+    func testFailureMessageReplacesRuntimeAndWorkPaths() async throws {
+        let script = "import sys, os; print(sys.prefix, os.getcwd(), file=sys.stderr); sys.exit(3)"
+        do {
+            _ = try await converter.runScript(script)
+            XCTFail("Succeeded")
+        } catch let DocumentConversionError.failed(status, message) {
+            XCTAssertEqual(status, 3)
+            XCTAssertEqual(message, "<runtime> <work>")
+        }
+    }
+
+    // MARK: - Input
+
+    func testDirectoryInputIsNotAFile() async throws {
+        for name in ["folder", "Thing.app"] {
+            let directory = folder.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            do {
+                _ = try await converter.markdown(forFile: directory)
+                XCTFail("Converted a directory")
+            } catch DocumentConversionError.notAFile {}
+        }
+    }
+
+    func testSymlinkToADirectoryIsNotAFile() async throws {
+        let link = folder.appendingPathComponent("link.docx")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+        do {
+            _ = try await converter.markdown(forFile: link)
+            XCTFail("Converted a directory")
+        } catch DocumentConversionError.notAFile {}
+    }
+
+    func testInputLargerThanTheCapIsRejected() async throws {
+        converter.maxInputBytes = 8
+        do {
+            let markdown = try await converter.markdown(forFile: documents.appendingPathComponent("page.html"))
+            XCTFail("Accepted a file over the cap: \(markdown)")
+        } catch DocumentConversionError.inputTooLarge {}
+    }
+
+    func testUnreadableInputIsReportedWithoutItsPath() async throws {
+        let file = folder.appendingPathComponent("secret-name.txt")
+        try "text".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+        do {
+            _ = try await converter.markdown(forFile: file)
+            XCTFail("Read an unreadable file")
+        } catch let error as DocumentConversionError {
+            XCTAssertEqual(error, .unreadableInput)
+            XCTAssertFalse("\(error)".contains("secret-name"))
+        }
+    }
+
     func testMissingRuntimeIsReported() async throws {
         let missing = folder.appendingPathComponent("markitdown/bin/python3")
         do {

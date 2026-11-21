@@ -8,7 +8,8 @@ public enum DocumentConversionError: Error, Equatable {
     /// The conversion took longer than the converter's timeout and was stopped.
     case timedOut
     /// MarkItDown or the OCR helper failed. `message` is the end of what it wrote to stderr (about
-    /// 2 KB), e.g. a traceback ending in `UnsupportedFormatException` or `FileConversionException`.
+    /// 2 KB), e.g. `FileConversionException: …`, with the runtime and work directory paths
+    /// replaced by `<runtime>` and `<work>`.
     case failed(status: Int32, message: String)
     /// The Markdown was longer than the converter's `maxOutputBytes`; the conversion was stopped.
     case outputTooLarge
@@ -16,6 +17,12 @@ public enum DocumentConversionError: Error, Equatable {
     case unreadable
     /// A PDF without text on which OCR found no text either.
     case noTextFound
+    /// The input is not a regular file (a directory, a package, a device, …).
+    case notAFile
+    /// The input is larger than the converter's `maxInputBytes`.
+    case inputTooLarge
+    /// The input could not be read or copied. Carries no path and no system error, which name the user's files.
+    case unreadableInput
 }
 
 /// Converts one local file (PDF, DOCX, PPTX, XLSX, HTML, …) to Markdown with the bundled MarkItDown.
@@ -34,6 +41,8 @@ public struct DocumentConverter: Sendable {
     public var timeout: Duration
     /// The longest Markdown accepted, in bytes, from MarkItDown and from the OCR helper.
     public var maxOutputBytes: Int
+    /// The largest input file accepted, in bytes.
+    public var maxInputBytes: Int
     /// The `pagecapture-ocr` helper that reads scanned PDFs.
     public var ocrHelperURL: URL
     /// How long the OCR helper may take before it is stopped; a budget of its own, on top of `timeout`.
@@ -56,6 +65,7 @@ public struct DocumentConverter: Sendable {
         pythonURL: URL = DocumentConverter.bundledPythonURL,
         timeout: Duration = .seconds(120),
         maxOutputBytes: Int = 50 << 20,
+        maxInputBytes: Int = 500 << 20,
         ocrHelperURL: URL = DocumentConverter.bundledOCRHelperURL,
         ocrTimeout: Duration = .seconds(300),
         pdfFallback: (@Sendable (URL) async throws -> String)? = nil
@@ -63,6 +73,7 @@ public struct DocumentConverter: Sendable {
         self.pythonURL = pythonURL
         self.timeout = timeout
         self.maxOutputBytes = maxOutputBytes
+        self.maxInputBytes = maxInputBytes
         self.ocrHelperURL = ocrHelperURL
         self.ocrTimeout = ocrTimeout
         self.pdfFallback = pdfFallback
@@ -84,7 +95,7 @@ public struct DocumentConverter: Sendable {
         return try await withWorkDirectory { directory in
             let fileExtension = Self.sanitisedExtension(url.pathExtension)
             let copy = directory.appendingPathComponent(fileExtension.isEmpty ? "input" : "input.\(fileExtension)")
-            try FileManager.default.copyItem(at: url.resolvingSymlinksInPath(), to: copy)
+            try copyInput(url, to: copy)
             let result = try await runSandboxed(pythonRun(Self.convertScript, arguments: [copy.path]), in: directory)
             guard result.status == 0 else { throw result.failure }
             let markdown = String(decoding: result.output, as: UTF8.self)
@@ -93,6 +104,24 @@ public struct DocumentConverter: Sendable {
             }
             if let pdfFallback { return try await pdfFallback(copy) }
             return try await recognise(copy, in: directory)
+        }
+    }
+
+    /// Copies the regular file `url` (after resolving symlinks) to `copy`, within `maxInputBytes`.
+    private func copyInput(_ url: URL, to copy: URL) throws {
+        let source = url.resolvingSymlinksInPath()
+        let values: URLResourceValues
+        do {
+            values = try source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        } catch {
+            throw DocumentConversionError.unreadableInput
+        }
+        guard values.isRegularFile == true else { throw DocumentConversionError.notAFile }
+        guard (values.fileSize ?? 0) <= maxInputBytes else { throw DocumentConversionError.inputTooLarge }
+        do {
+            try FileManager.default.copyItem(at: source, to: copy)
+        } catch {
+            throw DocumentConversionError.unreadableInput
         }
     }
 
@@ -161,12 +190,17 @@ public struct DocumentConverter: Sendable {
     // MARK: - Sandboxed run
 
     /// Converts `sys.argv[1]`, a local file, and writes the Markdown to stdout as UTF-8. Only
-    /// `convert_local`: MarkItDown never gets a URL or a stream to fetch.
+    /// `convert_local`: MarkItDown never gets a URL or a stream to fetch. A failure prints only
+    /// `ExceptionName: message` to stderr, never a traceback, whose frames hold the runtime's path.
     static let convertScript = """
         import sys
-        from markitdown import MarkItDown
-        result = MarkItDown(enable_plugins=False).convert_local(sys.argv[1])
-        sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
+        try:
+            from markitdown import MarkItDown
+            result = MarkItDown(enable_plugins=False).convert_local(sys.argv[1])
+            sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
+        except Exception as e:
+            sys.stderr.write(type(e).__name__ + ": " + str(e) + "\\n")
+            sys.exit(1)
         """
 
     /// Denies everything but what converting the fixtures needs: running the runtime's Python
@@ -200,6 +234,18 @@ public struct DocumentConverter: Sendable {
         /// The whole environment, besides `HOME` and `TMPDIR` (the work directory) and `PATH` and `LANG`.
         var environment: [String: String] = [:]
         var timeout: Duration
+        /// Further paths (besides the profile's `RUNTIME`) that name the runtime, e.g. through a link.
+        var runtimeAliases: [String] = []
+
+        /// The paths a failure message must not show, longest first, with their placeholders.
+        func redactions(workDirectory: URL) -> [(path: String, placeholder: String)] {
+            let work = workDirectory.path
+            var paths = [(work, "<work>")]
+            if work.hasPrefix("/private/") { paths.append((String(work.dropFirst("/private".count)), "<work>")) }
+            let runtime = parameters.first { $0.key == "RUNTIME" }?.value
+            paths += ([runtime].compactMap { $0 } + runtimeAliases).map { ($0, "<runtime>") }
+            return paths.sorted { $0.0.count > $1.0.count }.map { (path: $0.0, placeholder: $0.1) }
+        }
     }
 
     /// What a sandboxed program that ran to its end (not stopped) did.
@@ -209,10 +255,15 @@ public struct DocumentConverter: Sendable {
         var exited: Bool
         var output: Data
         var errors: Data
+        /// Paths to replace in the message, with what replaces them.
+        var redactions: [(path: String, placeholder: String)] = []
 
-        /// `failed(status:message:)` with the end of stderr.
+        /// `failed(status:message:)` with the end of stderr, without the runtime and work paths.
         var failure: DocumentConversionError {
-            let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            var message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            for (path, placeholder) in redactions where !path.isEmpty {
+                message = message.replacingOccurrences(of: path, with: placeholder)
+            }
             return .failed(status: status, message: message.isEmpty ? "Exited with status \(status)" : message)
         }
     }
@@ -228,7 +279,8 @@ public struct DocumentConverter: Sendable {
             profile: profile,
             parameters: ["RUNTIME": runtime.path, "PYTHON": python.path],
             environment: ["PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"],
-            timeout: timeout)
+            timeout: timeout,
+            runtimeAliases: [pythonURL.deletingLastPathComponent().deletingLastPathComponent().path])
     }
 
     /// `pagecapture-ocr arguments…` under `ocrSandboxProfile`.
@@ -337,7 +389,8 @@ public struct DocumentConverter: Sendable {
         if timedOut.withLock({ $0 }) { throw DocumentConversionError.timedOut }
         if tooLarge.withLock({ $0 }) { throw DocumentConversionError.outputTooLarge }
         try Task.checkCancellation()
-        return SandboxedResult(status: status, exited: exitedNormally.withLock { $0 }, output: output, errors: errors)
+        return SandboxedResult(status: status, exited: exitedNormally.withLock { $0 }, output: output, errors: errors,
+                               redactions: program.redactions(workDirectory: directory))
     }
 
     /// Reads `handle` to its end, or until `stopped` is set, on a background thread, keeping at
