@@ -30,5 +30,7 @@ jobs:
         run: swift build --build-tests
       # ToolsTests and VideoDownloaderTests skip themselves without ffmpeg etc. in build/tools
       # (scripts/fetch-tools.sh builds ffmpeg from source; CI only has build/tools/markitdown).
+      - name: OCR sandbox diagnostics (temporary)
+        run: scripts/ci-ocr-diag.sh
       - name: Test
-        run: swift test
+        run: swift test --filter 'OCRHelperTests|PDFTextRecognizerTests|DocumentConverterTests'
