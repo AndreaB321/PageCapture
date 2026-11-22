@@ -48,16 +48,6 @@ run() {
 echo "=== unsandboxed"
 (cd "$D" && /usr/bin/time -p "$HELPER" "$D/scan.pdf"); echo "exit $?"
 run "profile as is" "$PROFILE"
-run "plus all iokit user clients" "$PROFILE
-(allow iokit-open-user-client)"
-run "plus MTLCompilerService global-name + xpc-service-name" "$PROFILE
-(allow mach-lookup (global-name \"com.apple.MTLCompilerService\") (xpc-service-name \"com.apple.MTLCompilerService\"))"
-run "plus all mach-lookup" "$PROFILE
-(allow mach-lookup)"
-run "plus iokit all + mach-lookup + iokit-get-properties" "$PROFILE
-(allow iokit-open-user-client) (allow mach-lookup) (allow iokit-get-properties)"
-echo "=== user client classes"
-ioreg -l | grep -o '"IOUserClientClass" = "[A-Za-z0-9_]*"' | sort | uniq -c
-echo "=== displays"
-system_profiler SPDisplaysDataType
+run "without AppleParavirtDeviceUserClient" "$(echo "$PROFILE" | grep -v AppleParavirtDeviceUserClient)"
+run "without MTLCompilerService" "$(echo "$PROFILE" | grep -v MTLCompilerService)"
 exit 0

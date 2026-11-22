@@ -222,6 +222,8 @@ public struct DocumentConverter: Sendable {
         (allow sysctl-read)
         (allow iokit-open-user-client (iokit-user-client-class "IOSurfaceRootUserClient"))
         (allow iokit-open-user-client (iokit-user-client-class "AGXDeviceUserClient"))
+        (allow iokit-open-user-client (iokit-user-client-class "AppleParavirtDeviceUserClient"))
+        (allow mach-lookup (xpc-service-name "com.apple.MTLCompilerService"))
         (allow file-read* (subpath "/usr/share/icu"))
         """
 
