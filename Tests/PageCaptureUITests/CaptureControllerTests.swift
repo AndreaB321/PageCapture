@@ -127,6 +127,32 @@ final class CaptureControllerTests: XCTestCase {
         try await waitUntil("idle") { self.controller.machine.phase == .idle }
     }
 
+    /// A course page whose frame is a PDF.js player that fetched its PDF: Return picks that PDF, and
+    /// the saved original is the PDF the server sent.
+    func testPDFJSViewerFrameIsSavedAsItsPDF() async throws {
+        let server = try await PDFServer.start(pages: [
+            "/course": "<title>Course</title><iframe src='/player' style='position:fixed;inset:0;width:100%;height:100%;border:0'></iframe>",
+            "/player": "<canvas></canvas><script>window.pdfjsLib = {}; fetch('/content/document.pdf?v=1')</script>",
+        ])
+        defer { server.stop() }
+        controller.webView.load(URLRequest(url: server.url(path: "/course")))
+        try await waitUntil("PDF fetched") { server.paths.contains("/content/document.pdf?v=1") }
+        try await Task.sleep(for: .milliseconds(200))
+        formats = [.original]
+
+        controller.send(.shortcut)
+        try await Task.sleep(for: .milliseconds(300)) // the PDF.js check when picking starts
+        controller.send(.returnKey)
+        let pdf = server.url(path: "/content/document.pdf?v=1")
+        XCTAssertEqual(controller.machine.phase, .downloadingDocument(DocumentSource(url: pdf, kind: .pdf)))
+        try await waitUntil("saved") { !self.messages.isEmpty }
+
+        XCTAssertEqual(requests.map(\.kind), [.document])
+        let name = try XCTUnwrap(requests.first?.name)
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("\(name)/\(name).pdf")), PDFServer.pdf)
+        XCTAssertTrue(messages[0].hasPrefix("Document saved Saved to "), messages[0])
+    }
+
     private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -138,24 +164,28 @@ final class CaptureControllerTests: XCTestCase {
     }
 }
 
-/// Serves a small PDF as `application/pdf` at any path of `http://127.0.0.1:<port>`, one request
-/// per connection, and records the requests' referers.
+/// Serves a small PDF as `application/pdf` at any path of `http://127.0.0.1:<port>` but the HTML
+/// `pages`, one request per connection, and records the requests' paths and referers.
 private final class PDFServer: @unchecked Sendable {
     static let pdf = Data("%PDF-1.4\n% test document\n%%EOF\n".utf8)
     private let listener: NWListener
+    private let pages: [String: String]
     private let lock = NSLock()
     private var seen: [String] = []
+    private var seenPaths: [String] = []
 
     var referers: [String] { lock.withLock { seen } }
+    var paths: [String] { lock.withLock { seenPaths } }
 
-    private init(listener: NWListener) {
+    private init(listener: NWListener, pages: [String: String]) {
         self.listener = listener
+        self.pages = pages
     }
 
-    static func start() async throws -> PDFServer {
+    static func start(pages: [String: String] = [:]) async throws -> PDFServer {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-        let server = PDFServer(listener: try NWListener(using: parameters))
+        let server = PDFServer(listener: try NWListener(using: parameters), pages: pages)
         server.listener.newConnectionHandler = { [server] connection in server.serve(connection) }
         let started = AsyncStream<Bool> { continuation in
             server.listener.stateUpdateHandler = { state in
@@ -186,9 +216,12 @@ private final class PDFServer: @unchecked Sendable {
             let request = String(decoding: data ?? Data(), as: UTF8.self)
             let referer = request.split(separator: "\r\n").first { $0.lowercased().hasPrefix("referer:") }
                 .map { $0.dropFirst("referer:".count).trimmingCharacters(in: .whitespaces) } ?? ""
-            lock.withLock { seen.append(referer) }
-            let head = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: \(Self.pdf.count)\r\nConnection: close\r\n\r\n"
-            connection.send(content: Data(head.utf8) + Self.pdf, completion: .contentProcessed { _ in connection.cancel() })
+            let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+            lock.withLock { seen.append(referer); seenPaths.append(path) }
+            let page = pages[path].map { Data($0.utf8) }
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: \(page == nil ? "application/pdf" : "text/html")\r\n" +
+                "Content-Length: \((page ?? Self.pdf).count)\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(head.utf8) + (page ?? Self.pdf), completion: .contentProcessed { _ in connection.cancel() })
         }
     }
 }

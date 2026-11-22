@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # CFBundleShortVersionString; make-source-bundle.sh names the sources bundle after it.
-APP_VERSION=0.1.0
+APP_VERSION=0.2.0
 
 scripts/fetch-tools.sh
 

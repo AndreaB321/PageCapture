@@ -193,6 +193,8 @@ Tools**.
 When a page shows a PDF, Word (`.docx`), Excel (`.xlsx`, `.xls`), PowerPoint (`.pptx`) or Outlook
 (`.msg`) file, in a frame or embedded in the page, or through the Office Online or Google viewer,
 you can pick that document. When the page itself is a PDF, press Return.
+A PDF viewer built on PDF.js (such as an e-book in an online course) counts as its PDF:
+click it, or press Return when it fills most of the window.
 
 PageCapture does not scroll a document. It downloads the original file with your sign-in (the
 banner says "Downloading document…"; ⌘⇧S cancels), then the save panel offers two formats:

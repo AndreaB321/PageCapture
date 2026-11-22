@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<!-- Runs PDF.js but fetches no PDF (only its settings): an ordinary frame. -->
+<html><head><title>Player</title>
+<style>html, body { margin: 0; } canvas { display: block; width: 100%; height: 900px; background: #eee; }</style>
+</head><body>
+<canvas id="page1"></canvas>
+<script>
+  window.pdfjsLib = {};
+  fetch('content/settings.json').then((r) => r.text()).then(() => { document.body.dataset.loaded = 'yes'; });
+</script>
+</body></html>

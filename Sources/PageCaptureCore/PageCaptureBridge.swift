@@ -58,6 +58,11 @@ public final class PageCaptureBridge {
     /// Child frames by the token their parent frame named them with (see `capture.js`).
     private var framesByToken: [String: WKFrameInfo] = [:]
     private var isPicking = false
+    /// Bumped whenever picking starts or stops, so a late PDF.js check is ignored.
+    private var pickingSession = 0
+    /// The PDF.js viewers found since picking started (see `findPDFViewer`): the PDF each shows, and
+    /// how much of the view (CSS px²) it covers.
+    private(set) var pdfViewers: [(url: URL, area: Double)] = []
     /// What `collect(.picked)` collects (also when a picked document falls back to a page).
     private var picked: PickedArea?
     /// Whether the pick is the whole page, for the result message when a document falls back to a page.
@@ -93,9 +98,58 @@ public final class PageCaptureBridge {
 
     public func setPicking(_ on: Bool) {
         isPicking = on
+        pickingSession += 1
+        pdfViewers = []
         for frame in knownFrames {
             run("globalThis.__pageCapture.setPicking(\(on))", in: frame)
+            if on { findPDFViewer(in: frame) }
         }
+    }
+
+    /// Reads, in the page's own world, whether `frame` runs PDF.js and which PDF its standard viewer
+    /// names; the frame's script then finds the PDF and remembers it for a click (see `capture.js`).
+    private static let pdfjsProbe = """
+        try {
+          const app = window.PDFViewerApplication;
+          if (!window.pdfjsLib && !app) return null;
+          const urls = [];
+          if (app && typeof app.url === 'string') urls.push(app.url);
+          if (app && typeof app.baseUrl === 'string') urls.push(app.baseUrl);
+          return urls;
+        } catch (e) { return null; }
+        """
+
+    private func findPDFViewer(in frame: WKFrameInfo) {
+        let session = pickingSession
+        Task {
+            guard let urls = await evaluate(Self.pdfjsProbe, arguments: [:], in: frame, world: .page,
+                                            timeout: Self.frameTokenWait, as: { $0 as? [String] }),
+                  session == pickingSession,
+                  let viewer = await evaluate("return globalThis.__pageCapture.pdfViewer(urls);",
+                                              arguments: ["urls": urls], in: frame, timeout: Self.frameTokenWait,
+                                              as: Self.viewer),
+                  session == pickingSession else { return }
+            pdfViewers.append(viewer)
+        }
+    }
+
+    private nonisolated static func viewer(_ value: Any) -> (url: URL, area: Double)? {
+        guard let dict = value as? [String: Any], let src = dict["url"] as? String, let url = URL(string: src),
+              let area = (dict["area"] as? NSNumber)?.doubleValue else { return nil }
+        return (url, area)
+    }
+
+    /// The PDF of the only PDF.js viewer the user can see, when it covers at least half of the view.
+    /// Viewers are told apart by their PDF: a frame can be listed twice (it announces each document
+    /// it loads, the `about:blank` one before its own, and both answer from its current one).
+    private func coveringPDFViewer() -> URL? {
+        guard let webView else { return nil }
+        var areas: [URL: Double] = [:]
+        for viewer in pdfViewers where viewer.area > 0 { areas[viewer.url] = max(areas[viewer.url] ?? 0, viewer.area) }
+        let zoom = webView.pageZoom * webView.magnification
+        let viewArea = Double(webView.bounds.width * webView.bounds.height / (zoom * zoom))
+        guard areas.count == 1, let (url, area) = areas.first, viewArea > 0, area >= viewArea / 2 else { return nil }
+        return url
     }
 
     // MARK: Collection
@@ -190,19 +244,30 @@ public final class PageCaptureBridge {
     }
 
     /// Picks the whole page (Return, or a click outside any target) and returns the event for it:
-    /// a page that is itself a document is picked as one (SPEC "Documents").
+    /// a page that is itself a document, or the PDF.js viewer that fills most of it, is picked as
+    /// the document (SPEC "Documents").
     public func pickWholePage() -> CaptureEvent {
         picked = .wholePage
         guard let url = webView?.url else { return .picked(.wholePage) }
+        if let event = Self.event(for: pageDocument(url)) { return event }
+        if let pdf = coveringPDFViewer(),
+           let event = Self.event(for: DocumentSource.detect(url: pdf, mimeType: "application/pdf")) {
+            return event
+        }
+        return .picked(.wholePage)
+    }
+
+    /// The document the page at `url` itself is, if any.
+    private func pageDocument(_ url: URL) -> DocumentDetection? {
         let mimeType = mainFrameResponse.flatMap { Self.samePage($0.url, url) ? $0.mimeType : nil }
             .flatMap { DocumentKind.genericMIMETypes.contains(DocumentKind.essence(of: $0)) ? nil : $0 }
         // A known type that is not a document type makes it a page, whatever its URL looks like
         // (`…/blob/main/paper.pdf` served as HTML).
         if let mimeType, !mimeType.isEmpty, DocumentKind(mimeType: mimeType) == nil,
            DocumentKind.unsupportedMIMETypes[DocumentKind.essence(of: mimeType)] == nil {
-            return .picked(.wholePage)
+            return nil
         }
-        return Self.event(for: DocumentSource.detect(url: url, mimeType: mimeType)) ?? .picked(.wholePage)
+        return DocumentSource.detect(url: url, mimeType: mimeType)
     }
 
     private static func event(for detection: DocumentDetection?) -> CaptureEvent? {
@@ -250,9 +315,13 @@ public final class PageCaptureBridge {
             if frame.isMainFrame {
                 knownFrames.removeAll()
                 framesByToken.removeAll()
+                pdfViewers.removeAll()
             }
             knownFrames.append(frame)
-            if isPicking { run("globalThis.__pageCapture.setPicking(true)", in: frame) }
+            if isPicking {
+                run("globalThis.__pageCapture.setPicking(true)", in: frame)
+                findPDFViewer(in: frame)
+            }
         case "picked":
             guard isPicking else { return }
             // What was clicked, or what surrounds the embedded document that was.
@@ -291,21 +360,23 @@ public final class PageCaptureBridge {
             guard let frame = framesByToken[token] else { continue }
             if let json = await evaluate("return await globalThis.__pageCapture.frameVideos(options);",
                                          arguments: ["options": options], in: frame,
-                                         timeout: Self.frameVideosTimeout) {
+                                         timeout: Self.frameVideosTimeout, as: { $0 as? String }) {
                 result[token] = json
             }
         }
         return result
     }
 
-    /// Runs `script` in `frame`, giving up after `timeout` (a frame that navigates away may never answer).
-    private func evaluate(_ script: String, arguments: [String: Any], in frame: WKFrameInfo,
-                          timeout: Duration) async -> String? {
+    /// Runs `script` in `frame` (in this bridge's content world unless `world` says otherwise) and
+    /// converts its result, giving up after `timeout` (a frame that navigates away may never answer).
+    private func evaluate<T: Sendable>(_ script: String, arguments: [String: Any], in frame: WKFrameInfo,
+                                       world: WKContentWorld = PageCaptureBridge.contentWorld, timeout: Duration,
+                                       as convert: @escaping @MainActor (Any) -> T?) async -> T? {
         guard let webView else { return nil }
         return await withCheckedContinuation { continuation in
             let once = Once(continuation)
-            webView.callAsyncJavaScript(script, arguments: arguments, in: frame, in: Self.contentWorld) { result in
-                once.resume(returning: try? result.get() as? String)
+            webView.callAsyncJavaScript(script, arguments: arguments, in: frame, in: world) { result in
+                once.resume(returning: (try? result.get()).flatMap(convert))
             }
             Task { @MainActor in
                 try? await Task.sleep(for: timeout)
@@ -332,14 +403,14 @@ private enum PickedArea: Equatable {
 
 /// Resumes a continuation once, whichever of its callers comes first.
 @MainActor
-private final class Once {
-    private var continuation: CheckedContinuation<String?, Never>?
+private final class Once<T: Sendable> {
+    private var continuation: CheckedContinuation<T?, Never>?
 
-    init(_ continuation: CheckedContinuation<String?, Never>) {
+    init(_ continuation: CheckedContinuation<T?, Never>) {
         self.continuation = continuation
     }
 
-    func resume(returning value: String?) {
+    func resume(returning value: T?) {
         continuation?.resume(returning: value)
         continuation = nil
     }

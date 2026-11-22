@@ -3,7 +3,8 @@
 // content world, after merge.js. Talks to the app through the `pageCapture` message handler:
 //   { type: 'frameReady' }                                  when this frame's document starts
 //   { type: 'picked', kind: 'element'|'document'|'wholePage' }  when the user clicks in picker mode;
-//     for an embedded document (see shields) also { src, mimeType, frameToken? }
+//     for an embedded document (see shields) also { src, mimeType, frameToken? }, and for a
+//     click in a PDF.js viewer (see pdfViewer()) { src, mimeType: 'application/pdf' }
 //   { type: 'frameToken', token }                           when the parent frame names this frame
 // and asks it through the `pageCaptureAsk` handler, which replies:
 //   { type: 'frameVideos', tokens, options } → { token: JSON of frameVideos() in that child frame }
@@ -25,7 +26,8 @@
 
   // `captured`: the hovered target and the nodes its highlight outlines (see capturedRect()).
   // `shields`: the covers over embedded documents while picking (see showShields()).
-  const picker = { active: false, hovered: null, picked: null, overlay: null, captured: null, shields: [] };
+  // `viewerPDF`: the PDF this frame's PDF.js viewer shows, while picking (see pdfViewer()).
+  const picker = { active: false, hovered: null, picked: null, overlay: null, captured: null, shields: [], viewerPDF: null };
 
   function isScrollable(el) {
     if (el === document.scrollingElement) return false; // that is the frame document itself
@@ -336,6 +338,7 @@
     picker.active = !!on;
     picker.captured = null;
     if (!picker.active) {
+      picker.viewerPDF = null;
       highlight(null);
       if (picker.overlay) picker.overlay.remove();
       hideShields();
@@ -376,6 +379,7 @@
     if (!picker.active || !e.isTrusted) return;
     swallow(e);
     const embed = shieldedAt(e.target);
+    const viewerPDF = picker.viewerPDF;
     // An embedded document is picked as what surrounds it when the app cannot save it.
     const target = targetAt(embed || e.target);
     picker.picked = target;
@@ -386,9 +390,79 @@
       message.mimeType = embed.getAttribute('type') || '';
       // A frame's own document is captured instead, if it runs this script (see frameToken()).
       if (embed.matches(FRAMES)) message.frameToken = frameToken(embed, { frames: new Map() });
+    } else if (viewerPDF) {
+      message.src = viewerPDF;
+      message.mimeType = 'application/pdf';
     }
     post(message);
   }, true);
+
+  // ------------------------------------------------------------ PDF viewers
+  //
+  // A viewer built on PDF.js draws each page into a <canvas>, which a capture does not keep, so the
+  // PDF it shows is the document to save. PDF.js lives in the page's own world, which this script
+  // cannot see: when picking starts, the app reads it there and calls pdfViewer() with the
+  // result. The app keeps what pdfViewer() returns for Return (PageCaptureBridge.pickWholePage).
+
+  const PDF_PATH = /\.pdf$/i;
+  const PDF_INITIATORS = new Set(['fetch', 'xmlhttprequest', 'other']);
+
+  function httpURL(value) {
+    try {
+      const url = new URL(value, document.baseURI);
+      return /^https?:$/.test(url.protocol) ? url.href : null;
+    } catch (e) { return null; }
+  }
+
+  // The largest PDF this frame fetched (resource timing), or null.
+  function fetchedPDF() {
+    let best = null, bestSize = -1;
+    for (const e of performance.getEntriesByType('resource')) {
+      if (!PDF_INITIATORS.has(e.initiatorType) || !PDF_PATH.test(pathOf(e.name)) || !httpURL(e.name)) continue;
+      const size = Math.max(e.transferSize || 0, e.decodedBodySize || 0);
+      if (size >= bestSize) { best = e.name; bestSize = size; }
+    }
+    return best;
+  }
+
+  // The area (CSS px²) of this frame's viewport that shows in the top frame's, as far as the frames
+  // above it can be reached (a cross-origin parent does not say where this frame is in it).
+  function visibleArea() {
+    let rect = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+    let win = window;
+    while (win !== win.top) {
+      let el = null;
+      try { el = win.frameElement; } catch (e) { /* cross-origin */ }
+      if (!el) break;
+      const parent = el.ownerDocument.defaultView;
+      const style = parent.getComputedStyle(el);
+      if (style.visibility !== 'visible' || parseFloat(style.opacity) === 0) return 0;
+      const r = el.getBoundingClientRect();
+      const dx = r.left + el.clientLeft, dy = r.top + el.clientTop;
+      rect = {
+        left: Math.max(rect.left + dx, 0), top: Math.max(rect.top + dy, 0),
+        right: Math.min(rect.right + dx, parent.innerWidth), bottom: Math.min(rect.bottom + dy, parent.innerHeight),
+      };
+      win = parent;
+    }
+    return Math.max(rect.right - rect.left, 0) * Math.max(rect.bottom - rect.top, 0);
+  }
+
+  // `urls`: what the page world says the standard viewer's PDFViewerApplication shows (url, baseUrl),
+  // for a frame that runs PDF.js. Returns { url, area } when the PDF is found, else null; a click in
+  // this frame then picks that PDF.
+  function pdfViewer(urls) {
+    picker.viewerPDF = null;
+    if (!picker.active) return null;
+    let url = null;
+    for (const u of urls || []) {
+      if (typeof u === 'string' && !/^(blob|data):/i.test(u) && (url = httpURL(u))) break;
+    }
+    url = url || fetchedPDF();
+    if (!url) return null;
+    picker.viewerPDF = url;
+    return { url, area: visibleArea() };
+  }
 
   // ------------------------------------------------------------- collector
 
@@ -1749,6 +1823,6 @@
     });
   }
 
-  globalThis.__pageCapture = Object.freeze({ setPicking, capture, stop, frameVideos });
+  globalThis.__pageCapture = Object.freeze({ setPicking, pdfViewer, capture, stop, frameVideos });
   post({ type: 'frameReady' });
 })();

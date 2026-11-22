@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<!-- A course page that shows a SCORM package in a frame, which shows the e-book player in another
+     frame (served by FixtureHTTPServer; `?player=` names the player page). -->
+<html><head><title>Course</title>
+<style>html, body { margin: 0; height: 100%; } iframe { display: block; border: 0; width: 100%; height: 100%; }</style>
+</head><body>
+<iframe id="scorm"></iframe>
+<script>
+  const player = new URLSearchParams(location.search).get('player') || 'viewer.html';
+  document.getElementById('scorm').src = 'scorm.html?player=' + encodeURIComponent(player);
+</script>
+</body></html>
