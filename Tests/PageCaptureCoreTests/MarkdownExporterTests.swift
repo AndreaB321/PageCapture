@@ -77,6 +77,72 @@ final class MarkdownExporterTests: XCTestCase {
         XCTAssertEqual(markdown, "| Operator | Meaning |\n| --- | --- |\n| a \\| b | either |\n")
     }
 
+    func testPipeInCodeOrALinkURLKeepsTheTable() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <table><tr><th>Syntax</th><th>Note</th></tr>
+            <tr><td><code>a|b</code></td><td>code</td></tr>
+            <tr><td><a href="https://x.test/?q=a|b">search</a></td><td>link</td></tr></table>
+            """, images: [:])
+        XCTAssertEqual(markdown, """
+            | Syntax | Note |
+            | --- | --- |
+            | `a\\|b` | code |
+            | [search](https://x.test/?q=a\\|b) | link |
+
+            """)
+    }
+
+    /// A cell with an image makes `markdown.js` unwrap the table, so the alt text is checked on
+    /// MarkItDown's side alone.
+    func testPipeInAnImageAltKeepsTheTable() async throws {
+        let markdown = try await Self.converter().markdown(forCapturedPageHTML: """
+            <table><thead><tr><th>Picture</th><th>Note</th></tr></thead>
+            <tbody><tr><td><img src="https://x.test/i.png" alt="a|b"></td><td>alt</td></tr></tbody></table>
+            """)
+        let row = try XCTUnwrap(markdown.components(separatedBy: "\n").first { $0.hasSuffix("| alt |") })
+        XCTAssertTrue(row.contains("a\\|b"), row)
+        XCTAssertFalse(row.contains("a|b"), row)
+    }
+
+    func testInlineCodeIsOneLine() async throws {
+        let markdown = try await self.markdown(
+            fromHTML: "<p>Run <code>a\n# b</code> now</p><ul><li>Item <code>x\n- y</code></li></ul>", images: [:])
+        XCTAssertEqual(markdown, "Run `a # b` now\n\n- Item `x - y`\n")
+    }
+
+    func testWebLinksAreKeptAsTheyAre() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <p><a href="https://en.wikipedia.org/wiki/C++">C++</a>, <a href="https://x.test/@user">user</a>,
+            <a href="https://x.test/AT&amp;T">AT&amp;T</a>, <a href="https://x.test/a b(c)">space</a></p>
+            """, images: [:])
+        XCTAssertEqual(markdown, "[C++](https://en.wikipedia.org/wiki/C++), [user](https://x.test/@user), "
+            + "[AT&T](https://x.test/AT&T), [space](https://x.test/a%20b%28c%29)\n")
+    }
+
+    func testTildesThatWouldStrikeOrFenceStayText() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>~~~</p><p>a ~~x~~ b, ~5 min</p>", images: [:])
+        XCTAssertEqual(markdown, "\\~\\~\\~\n\na \\~\\~x\\~\\~ b, ~5 min\n")
+    }
+
+    func testBacktickFenceInTextStaysText() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>```</p><p>after</p>", images: [:])
+        XCTAssertEqual(markdown, "\\`\\`\\`\n\nafter\n")
+    }
+
+    /// MarkItDown's markdownify recurses once per level; past its limit the conversion fails
+    /// visibly instead of writing plain text without the link.
+    func testTooDeeplyNestedPageFailsVisibly() async throws {
+        let depth = 1000
+        let html = String(repeating: "<blockquote>", count: depth) + #"<a href="https://x.test/">link</a>"#
+            + String(repeating: "</blockquote>", count: depth)
+        do {
+            let markdown = try await self.markdown(fromHTML: html, images: [:])
+            XCTFail("expected a failure, got \(markdown.prefix(200))")
+        } catch let error as DocumentConversionError {
+            XCTAssertEqual(error.localizedDescription, "The page is nested too deeply to convert.")
+        }
+    }
+
     func testLineBreakSurvives() async throws {
         let markdown = try await self.markdown(fromHTML: "<p>One<br>Two</p>", images: [:])
         XCTAssertEqual(markdown, "One\\\nTwo\n")

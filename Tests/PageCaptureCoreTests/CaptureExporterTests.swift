@@ -270,6 +270,26 @@ final class CaptureExporterTests: XCTestCase {
         XCTAssertEqual(result.summary, "Saved to \(folder.path)")
     }
 
+    func testMarkdownFailureStillWritesTheOtherFormats() async throws {
+        let folder = parent.appendingPathComponent("NoMarkItDown")
+        let content = CapturedContent(html: "<p>Hi</p>", baseURL: URL(string: "pctest://main.test/")!, title: "",
+                                      stylesheets: [], imageURLs: [])
+        let empty = parent.appendingPathComponent("no-helpers")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        let result = try await CaptureExporter.export(
+            content, formats: [.html, .pdf, .markdown], to: folder,
+            webViewConfiguration: PDFExporterTests.configuration,
+            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4,
+            tools: Tools(helpersDirectory: empty, supportDirectory: parent.appendingPathComponent("support")))
+        XCTAssertNotNil(result.html)
+        XCTAssertNotNil(result.pdf)
+        XCTAssertNil(result.markdown)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(),
+                       ["NoMarkItDown.html", "NoMarkItDown.pdf"])
+        XCTAssertEqual(result.summary,
+                       "Saved to \(folder.path) (Markdown could not be written: The bundled MarkItDown is missing)")
+    }
+
     func testCancelledExportStopsBeforeWritingTheOutputs() async throws {
         let folder = parent.appendingPathComponent("Quit")
         let content = CapturedContent(html: "<p>Hi</p>", baseURL: URL(string: "pctest://main.test/")!, title: "",

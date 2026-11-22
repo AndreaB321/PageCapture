@@ -28,6 +28,26 @@ public enum DocumentConversionError: Error, Equatable {
     case unreadableInput
 }
 
+extension DocumentConversionError: LocalizedError {
+    /// A short sentence for the user; never a path or MarkItDown's own message.
+    public var errorDescription: String? {
+        switch self {
+        case .runtimeMissing: "The bundled MarkItDown is missing."
+        case .timedOut: "The conversion took too long."
+        case .failed(_, let message) where message.contains("RecursionError"):
+            "The page is nested too deeply to convert."
+        case .failed: "MarkItDown could not convert it."
+        case .stopped: "The conversion was stopped."
+        case .outputTooLarge: "The Markdown is too large."
+        case .unreadable: "The PDF could not be read."
+        case .noTextFound: "No text was found in the PDF."
+        case .notAFile: "It is not a file."
+        case .inputTooLarge: "The file is too large."
+        case .unreadableInput: "The file could not be read."
+        }
+    }
+}
+
 /// Converts one local file (PDF, DOCX, PPTX, XLSX, HTML, …) to Markdown with the bundled MarkItDown.
 ///
 /// The file is untrusted (downloaded from the web), so it never reaches MarkItDown in place: it is
@@ -261,36 +281,54 @@ public struct DocumentConverter: Sendable {
 
     /// `convertScript` for a captured page (`markdown(forCapturedPageHTML:)`), with the options
     /// SPEC "Saving" needs: a line break is a backslash (MarkItDown strips trailing spaces), text
-    /// that Markdown would read as syntax (`|`, `<tag>`, `1.`, `#`, …) is escaped, bullets are `-`,
-    /// a code block keeps its `language-…` class, and `mailto:` and `tel:` links stay links
-    /// (MarkItDown keeps only http, https and file links; never `javascript:`).
+    /// that Markdown would read as syntax (`<tag>`, `1.`, `#`, `~~`, …) is escaped, as is every
+    /// unescaped `|` in a table cell (also in its code, link URLs and image alt text), bullets are
+    /// `-`, a code block keeps its `language-…` class, and http, https, `mailto:`, `tel:` and
+    /// relative links are written as they are (MarkItDown's own percent-encodes URL paths and keeps
+    /// only http, https and file links; never `javascript:`). Only MarkItDown's HTML converter runs,
+    /// in strict mode: HTML nested too deeply for it fails, instead of coming out as plain text
+    /// without links or images (or, from the next converter, as the raw HTML).
     static let pageScript = """
         import sys
         try:
             import re
             import markdownify
+            from urllib.parse import urlsplit
             from markitdown import MarkItDown
+            from markitdown.converters import HtmlConverter
             from markitdown.converters._markdownify import _CustomMarkdownify
 
             _convert_a = _CustomMarkdownify.convert_a
 
             def convert_a(self, el, text, *args, **kwargs):
-                scheme, colon, _ = (el.get("href") or "").partition(":")
-                if colon and scheme.lower() in ("mailto", "tel") and el.find_parent("pre") is None:
+                try:
+                    scheme = urlsplit(el.get("href") or "").scheme.lower()
+                except ValueError:
+                    scheme = None
+                if scheme in ("", "http", "https", "mailto", "tel"):
                     return markdownify.MarkdownConverter.convert_a(self, el, text, *args, **kwargs)
+                # MarkItDown's drops any other scheme but file, so never writes `javascript:`.
                 return _convert_a(self, el, text, *args, **kwargs)
 
             _CustomMarkdownify.convert_a = convert_a
 
-            special = re.compile(r"[\\\\`*_\\[\\]]|<(?=[A-Za-z/!?])")
+            unescaped_pipe = re.compile(r"(?<!\\\\)((?:\\\\\\\\)*)\\|")
+
+            def table_cell(convert):
+                def convert_cell(self, el, text, *args, **kwargs):
+                    return convert(self, el, unescaped_pipe.sub(r"\\1\\\\|", text), *args, **kwargs)
+                return convert_cell
+
+            _CustomMarkdownify.convert_td = table_cell(_CustomMarkdownify.convert_td)
+            _CustomMarkdownify.convert_th = table_cell(_CustomMarkdownify.convert_th)
+
+            special = re.compile(r"[\\\\`*_\\[\\]]|<(?=[A-Za-z/!?])|~(?=~)|(?<=~)~")
             block_start = re.compile(r"^(\\s*)(#{1,6}(?:\\s|$)|>|(?:-+|=+|\\+)(?:\\s|$))")
             list_start = re.compile(r"^(\\s*\\d{1,9})([.)](?:\\s|$))")
             inline_only = {"h1", "h2", "h3", "h4", "h5", "h6", "td", "th"}
 
             def escape(self, text, parent_tags):
                 text = special.sub(r"\\\\\\g<0>", text)
-                if parent_tags & {"td", "th"}:
-                    text = text.replace("|", "\\\\|")
                 if not parent_tags & inline_only:
                     text = list_start.sub(r"\\1\\\\\\2", block_start.sub(r"\\1\\\\\\2", text))
                 return text
@@ -315,8 +353,10 @@ public struct DocumentConverter: Sendable {
                             return name[len("language-"):]
                 return ""
 
-            result = MarkItDown(enable_plugins=False).convert_local(
-                sys.argv[1], newline_style="backslash", bullets="-",
+            converter = MarkItDown(enable_builtins=False, enable_plugins=False)
+            converter.register_converter(HtmlConverter())
+            result = converter.convert_local(
+                sys.argv[1], strict=True, newline_style="backslash", bullets="-",
                 code_language_callback=code_language)
             sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
         except Exception as e:

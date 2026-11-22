@@ -63,10 +63,14 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
 - Markdown is written by the bundled MarkItDown (below) from the page's cleaned-up HTML: the app
   decides the content and its structure (the rules here), MarkItDown writes it, in the same
   isolated process as documents. Line breaks are kept (as `\` at the end of the line), code blocks
-  keep their language, and text that Markdown would read as markup (a line starting with `1.`, `#`
-  or `-`, a `|` in a table cell, `<tag>`) is escaped, so it stays text.
+  keep their language, inline code stays on one line, and text that Markdown would read as markup
+  (a line starting with `1.`, `#`, `-` or a fence, `~~`, `<tag>`, and a `|` anywhere in a table
+  cell, also in its code, link URLs and image alt text) is escaped, so it stays text and the table
+  keeps its columns. If the Markdown cannot be written (MarkItDown fails, or the page is nested too
+  deeply for it), the other formats are still saved and the result message says why.
 - Markdown references images by relative path `images/<file>`; links (web, `mailto:` and `tel:`)
-  are kept as Markdown links with absolute URLs; `javascript:` links keep only their text.
+  are kept as Markdown links with their absolute URLs as the page has them (only spaces and
+  parentheses are percent-encoded); `javascript:` links keep only their text.
 - Markdown writes text the page styles as a sub-heading (short, larger or bold-and-larger than the
   body text, not an `h1`-`h6`) as a heading, one level below the page's next larger heading. A
   table whose rows each start with a short marker (✓, a number, a letter) or a small icon becomes
@@ -101,9 +105,10 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   URL if given one) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
   a symlink to it. It writes the Markdown of every capture (above), and is the runtime for
   converting documents to Markdown, coming in a later version.
-- Documents are converted in isolated helper processes with no network and no access to the user's files.
-  Scanned PDFs are read with on-device text recognition (macOS Vision, fast mode) in a separate isolated
-  helper. Both are groundwork for a later version; nothing in the app uses them yet.
+- MarkItDown runs in an isolated helper process with no network and no access to the user's files;
+  every Markdown save uses it. Scanned PDFs are read with on-device text recognition (macOS Vision,
+  fast mode) in a separate isolated helper, groundwork for converting documents in a later version;
+  nothing in the app uses it yet.
 
 ## Install
 

@@ -156,7 +156,10 @@
       case 'strong': case 'b': target.append(into(make(ctx, 'strong'))); return;
       case 'em': case 'i': case 'cite': case 'dfn': target.append(into(make(ctx, 'em'))); return;
       case 'del': case 's': case 'strike': target.append(into(make(ctx, 'del'))); return;
-      case 'code': case 'kbd': case 'samp': case 'tt': target.append(make(ctx, 'code', {}, node.textContent)); return;
+      // Inline code is one line: a source line break would start a new block (`# b`, `- y`).
+      case 'code': case 'kbd': case 'samp': case 'tt':
+        target.append(make(ctx, 'code', {}, node.textContent.replace(/[ \t\n\r\f]+/g, ' ')));
+        return;
       case 'a': {
         const href = (node.getAttribute('href') || '').trim();
         if (!href || /^javascript:/i.test(href)) into(target);
@@ -692,7 +695,7 @@
   // start of a block, after a line break or right after another space (also across elements, as in
   // `a <b> b</b>`) goes. MarkItDown keeps the line breaks of text and writes the space around an
   // emphasis outside it, so without this a source line break or a doubled space would reach the
-  // Markdown. Code is left as it is.
+  // Markdown. Code is left as it is (inline code was made one line by inline()).
   function collapseSpaces(root) {
     let afterSpace = true;
     const walk = (node) => {
