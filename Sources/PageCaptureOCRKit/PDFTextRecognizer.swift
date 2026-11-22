@@ -12,7 +12,8 @@ public enum PDFTextRecognizerError: Error, Equatable {
 
 /// Reads the text of an image-only (scanned) PDF with Apple's on-device Vision OCR and returns Markdown.
 /// Recognition uses `.fast`, because the sandboxed helper has no Neural Engine. It still needs the GPU:
-/// the helper's sandbox allows the GPU's user client (`AGXDeviceUserClient`), without which Vision finds
+/// the helper's sandbox allows the GPU's user client (`AGXDeviceUserClient`, or on a virtual Mac
+/// `AppleParavirtDeviceUserClient` and Metal's shader compiler), without which Vision finds
 /// no text at all, even in `.fast` mode. `.fast` is less precise than `.accurate` on hard scans and
 /// supports fewer languages (the European ones are fine).
 public enum PDFTextRecognizer {
@@ -35,10 +36,11 @@ public enum PDFTextRecognizer {
         var recognisedAny = false
         for index in 0..<count {
             if Task.isCancelled { throw CancellationError() }
-            let text: String = try autoreleasepool {
-                // CGPDFDocument numbers pages from 1.
-                guard let page = document.page(at: index + 1), let image = render(page) else { return "" }
-                return try recognise(image)
+            // CGPDFDocument numbers pages from 1.
+            let image = autoreleasepool { document.page(at: index + 1).flatMap(render) }
+            var text = ""
+            if let image {
+                text = try await offThePool { try autoreleasepool { try recognise(image) } }
             }
             if !text.isEmpty { recognisedAny = true }
             pages.append(labelled ? "<!-- page \(index + 1) -->\n\n\(text)" : text)
@@ -48,6 +50,19 @@ public enum PDFTextRecognizer {
             pages.append("<!-- stopped after \(count) of \(pageCount) pages -->")
         }
         return pages.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n") + "\n"
+    }
+
+    /// Where pages are recognised, one at a time.
+    private static let workQueue = DispatchQueue(label: "PDFTextRecognizer.work")
+
+    /// Runs `work` on `workQueue`, never on a thread of Swift's cooperative pool: Vision's text
+    /// recogniser waits, inside `perform`, for work it schedules on that pool, so once every pool
+    /// thread is blocked in `perform` (several recognitions on a machine with few cores) nothing is
+    /// left to run that work and every recognition waits forever.
+    private static func offThePool<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            workQueue.async { continuation.resume(with: Result(catching: work)) }
+        }
     }
 
     // MARK: Rendering
