@@ -84,7 +84,8 @@ final class CaptureControllerTests: XCTestCase {
         let url = URL(string: "https://documents.test/missing.pdf")!
         controller.webView.loadHTMLString("<title>Fallback</title><h1>Fallback page</h1>", baseURL: url)
         try await waitUntil("page loaded") { !self.controller.webView.isLoading && self.controller.webView.url == url }
-        formats = [.markdown]
+        // HTML: page Markdown needs the bundled MarkItDown, which `swift test` has no app bundle for.
+        formats = [.html]
 
         controller.send(.shortcut)
         controller.send(.returnKey)
@@ -95,8 +96,8 @@ final class CaptureControllerTests: XCTestCase {
         XCTAssertTrue(messages[0].hasPrefix("Capture saved"), messages[0])
         XCTAssertTrue(messages[0].contains("the document could not be downloaded (HTTP 404), so the page was captured instead"),
                       messages[0])
-        let markdown = try String(contentsOf: folder.appendingPathComponent("Fallback/Fallback.md"), encoding: .utf8)
-        XCTAssertTrue(markdown.contains("Fallback page"), markdown)
+        let html = try String(contentsOf: folder.appendingPathComponent("Fallback/Fallback.html"), encoding: .utf8)
+        XCTAssertTrue(html.contains("Fallback page"), html)
     }
 
     /// Quitting while the Save Document panel is open removes the downloaded original: the app's quit
