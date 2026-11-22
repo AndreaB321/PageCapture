@@ -13,9 +13,22 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: swift --version
+      - name: Cache MarkItDown runtime
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/tools/markitdown
+            build/tools-cache/markitdown.stamp
+            build/tools-cache/markitdown.tree
+            build/notices
+          key: markitdown-${{ runner.os }}-${{ hashFiles('scripts/fetch-tools.sh', 'scripts/tool-pins.sh', 'scripts/markitdown-requirements.txt') }}
+      - name: MarkItDown runtime
+        run: |
+          command -v zstd >/dev/null || brew install zstd
+          scripts/fetch-tools.sh markitdown
       - name: Build
         run: swift build --build-tests
-      # ToolsTests and VideoDownloaderTests skip themselves without build/tools (scripts/fetch-tools.sh,
-      # which builds ffmpeg from source); everything else runs.
+      # ToolsTests and VideoDownloaderTests skip themselves without ffmpeg etc. in build/tools
+      # (scripts/fetch-tools.sh builds ffmpeg from source; CI only has build/tools/markitdown).
       - name: Test
         run: swift test
