@@ -248,8 +248,8 @@ one with its version, licence, what it contains and where its source is. The app
 and the licence texts in `Contents/Resources/ThirdPartyNotices/`.
 
 The app also carries a Python runtime with Microsoft [MarkItDown](https://github.com/microsoft/markitdown)
-(MIT) in `Contents/Resources/markitdown`, built by `scripts/fetch-tools.sh markitdown`. It is the
-basis for converting documents to Markdown in a later version; this version does not use it yet.
+(MIT) in `Contents/Resources/markitdown`, built by `scripts/fetch-tools.sh markitdown`. It writes
+the Markdown of each capture, and is the basis for converting documents to Markdown in a later version.
 
 PageCapture uses code of [FFmpeg](https://ffmpeg.org) licensed under the
 [LGPLv2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html), and the MarkItDown runtime's

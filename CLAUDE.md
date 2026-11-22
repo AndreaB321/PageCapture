@@ -16,7 +16,9 @@ scrolling webpage, or one frame or scrolling area of it, and saves it as HTML, P
 | App and DMG | `scripts/make-dmg.sh` | runs fetch-tools first |
 
 Without `build/tools`, `ToolsTests` and `VideoDownloaderTests` are skipped (29 tests): a green run
-says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing anything in
+says "0 failures" with those skips. Markdown output needs MarkItDown: without `build/tools/markitdown`
+(`scripts/fetch-tools.sh markitdown`) `MarkdownExporterTests`, `DocumentConverterTests` and the
+Markdown tests of `CaptureExporterTests` and `CaptureIntegrationTests` are skipped too. Run `scripts/fetch-tools.sh` before changing anything in
 `Tools.swift` or `VideoDownloader.swift`, so those tests actually run.
 
 ## Layout
@@ -32,7 +34,8 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
     MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (`(deny
     default)`: reads only the runtime, its work directory and system libraries, writes only in its
     work directory, no network, no child processes); runs the `pagecapture-ocr` helper, under its
-    own profile, on PDFs without text; no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
+    own profile, on PDFs without text. `MarkdownExporter` uses it (`markdown(forCapturedPageHTML:)`):
+    `markdown.js` turns the capture into semantic HTML, MarkItDown writes the Markdown. Fixtures: `scripts/make-document-fixtures.sh`.
 - `Sources/PageCaptureOCRKit`: `PDFTextRecognizer`, Vision OCR (`.fast`; the sandbox allows the GPU,
   not the Neural Engine) of image-only PDFs to Markdown, rendered with CoreGraphics, never PDFKit.
   Used by the `pagecapture-ocr` helper, which `DocumentConverter` runs under its own sandbox

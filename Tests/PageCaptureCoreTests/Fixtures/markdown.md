@@ -4,7 +4,7 @@ Plain text with **bold**, *italic*, **spaced bold** and `` inline `code` ``. Whi
 
 ## 1. Numbered heading
 
-A [link with *style*](https://example.com/docs?a=1&b=%282%29) and an inert link.  
+A [link with *style*](https://example.com/docs?a=1&b=%282%29) and an inert link.\
 After a break.
 
 Literal \*stars\* and \[brackets\] and\_underscores\_.

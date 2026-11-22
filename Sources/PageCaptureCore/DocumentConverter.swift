@@ -110,6 +110,24 @@ public struct DocumentConverter: Sendable {
         }
     }
 
+    /// The Markdown for `html`, a captured page's semantic HTML (`markdown.js`), the way
+    /// `MarkdownExporter` wants it (`pageScript`). Runs exactly like `markdown(forFile:)`, on
+    /// `input.html` written in the work directory, without the PDF fallback.
+    func markdown(forCapturedPageHTML html: String) async throws -> String {
+        try Self.checkExecutable(pythonURL)
+        return try await withWorkDirectory { directory in
+            let file = directory.appendingPathComponent("input.html")
+            do {
+                try Data(html.utf8).write(to: file, options: .withoutOverwriting)
+            } catch {
+                throw DocumentConversionError.unreadableInput
+            }
+            let result = try await runSandboxed(pythonRun(Self.pageScript, arguments: [file.path]), in: directory)
+            guard result.exited, result.status == 0 else { throw result.failure }
+            return String(decoding: result.output, as: UTF8.self)
+        }
+    }
+
     /// Copies the data of the regular file `url` (after resolving symlinks) to the new file `copy`,
     /// within `maxInputBytes`. Only the bytes, with mode 0600: no flags (a Finder-locked file's
     /// `uchg` would keep the work directory from being deleted) and no extended attributes. The
@@ -235,6 +253,60 @@ public struct DocumentConverter: Sendable {
         try:
             from markitdown import MarkItDown
             result = MarkItDown(enable_plugins=False).convert_local(sys.argv[1])
+            sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
+        except Exception as e:
+            sys.stderr.write(type(e).__name__ + ": " + str(e) + "\\n")
+            sys.exit(1)
+        """
+
+    /// `convertScript` for a captured page (`markdown(forCapturedPageHTML:)`), with the options
+    /// SPEC "Saving" needs: a line break is a backslash (MarkItDown strips trailing spaces), text
+    /// that Markdown would read as syntax (`|`, `<tag>`, `1.`, `#`, …) is escaped, bullets are `-`,
+    /// a code block keeps its `language-…` class, and `mailto:` and `tel:` links stay links
+    /// (MarkItDown keeps only http, https and file links; never `javascript:`).
+    static let pageScript = """
+        import sys
+        try:
+            import re
+            import markdownify
+            from markitdown import MarkItDown
+            from markitdown.converters._markdownify import _CustomMarkdownify
+
+            _convert_a = _CustomMarkdownify.convert_a
+
+            def convert_a(self, el, text, *args, **kwargs):
+                scheme, colon, _ = (el.get("href") or "").partition(":")
+                if colon and scheme.lower() in ("mailto", "tel") and el.find_parent("pre") is None:
+                    return markdownify.MarkdownConverter.convert_a(self, el, text, *args, **kwargs)
+                return _convert_a(self, el, text, *args, **kwargs)
+
+            _CustomMarkdownify.convert_a = convert_a
+
+            special = re.compile(r"[\\\\`*_\\[\\]]|<(?=[A-Za-z/!?])")
+            block_start = re.compile(r"^(\\s*)(#{1,6}(?:\\s|$)|>|(?:-+|=+|\\+)(?:\\s|$))")
+            list_start = re.compile(r"^(\\s*\\d{1,9})([.)](?:\\s|$))")
+            inline_only = {"h1", "h2", "h3", "h4", "h5", "h6", "td", "th"}
+
+            def escape(self, text, parent_tags):
+                text = special.sub(r"\\\\\\g<0>", text)
+                if parent_tags & {"td", "th"}:
+                    text = text.replace("|", "\\\\|")
+                if not parent_tags & inline_only:
+                    text = list_start.sub(r"\\1\\\\\\2", block_start.sub(r"\\1\\\\\\2", text))
+                return text
+
+            _CustomMarkdownify.escape = escape
+
+            def code_language(el):
+                for node in (el, el.find("code")):
+                    for name in (node.get("class") or []) if node is not None else []:
+                        if name.startswith("language-"):
+                            return name[len("language-"):]
+                return ""
+
+            result = MarkItDown(enable_plugins=False).convert_local(
+                sys.argv[1], newline_style="backslash", bullets="-",
+                code_language_callback=code_language)
             sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
         except Exception as e:
             sys.stderr.write(type(e).__name__ + ": " + str(e) + "\\n")

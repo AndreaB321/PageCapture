@@ -100,8 +100,10 @@ public enum CaptureExporter {
             result.html = url
         }
         if formats.contains(.markdown) {
+            let converter = DocumentConverter(
+                pythonURL: tools.helpersDirectory.appendingPathComponent("markitdown/bin/python3"))
             let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: images.relativePaths,
-                                                               videos: result.videos)
+                                                               videos: result.videos, converter: converter)
             let url = folder.appendingPathComponent("\(name).md")
             try Data(markdown.utf8).write(to: url, options: .atomic)
             result.markdown = url
