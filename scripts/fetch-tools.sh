@@ -169,8 +169,9 @@ assert not extra, f"excluded packages installed: {extra}"'
     md_tree_digest "$TOOLS/markitdown" >"$MD_TREE"
     echo "$MD_WANT" >"$MD_STAMP"
 fi
-# GNU libiconv, inside lxml.
-fetch "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt" "$NOTICES/LGPL-2.1.txt" "$LGPL21_SHA256"
+# GNU libiconv, inside lxml. The GNU licence texts are kept in scripts/licenses (from
+# https://www.gnu.org/licenses/, which often refuses connections from CI runners).
+copy_pinned scripts/licenses/LGPL-2.1.txt "$NOTICES/LGPL-2.1.txt" "$LGPL21_SHA256"
 
 cat >"$NOTICES/MarkItDown.txt" <<EOF
 MarkItDown $MARKITDOWN_VERSION and the Python it runs on
@@ -304,7 +305,7 @@ fetch "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP_VERSION/LICENSE" \
 # executable is GPLv3+, so the GPL text goes along.
 fetch "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP_VERSION/THIRD_PARTY_LICENSES.txt" \
     "$NOTICES/yt-dlp-THIRD_PARTY_LICENSES.txt" "$YTDLP_THIRD_PARTY_SHA256"
-fetch "https://www.gnu.org/licenses/gpl-3.0.txt" "$NOTICES/GPL-3.0.txt" "$GPL3_SHA256"
+copy_pinned scripts/licenses/GPL-3.0.txt "$NOTICES/GPL-3.0.txt" "$GPL3_SHA256"
 
 # --- Deno ------------------------------------------------------------------------------------
 DENO_STAMP="$CACHE/deno.stamp"

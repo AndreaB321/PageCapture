@@ -152,6 +152,36 @@ import Testing
         #expect(output.hasSuffix("<!-- stopped after 1 of 2 pages -->\n"))
     }
 
+    /// More recognitions at once than Swift's thread pool has threads (a CI runner has 3 cores) all
+    /// finish: if each held a pool thread while Vision waits for work it schedules on that pool, they
+    /// would all wait forever. Synchronous, so the wait has a time limit even with the pool exhausted.
+    @Test func moreRecognitionsAtOnceThanThePoolHasThreadsAllFinish() {
+        let url = Self.scannedPDF([[Block(lines: ["Crowded pool delta"], top: 100)]])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let count = ProcessInfo.processInfo.activeProcessorCount * 2
+        let finished = DispatchGroup()
+        let recognised = Recognised()
+        for _ in 0..<count {
+            finished.enter()
+            Task.detached {
+                if let output = try? await PDFTextRecognizer.markdown(fromPDF: url),
+                    Self.normalised(output).contains("crowded pool delta") {
+                    recognised.add()
+                }
+                finished.leave()
+            }
+        }
+        #expect(finished.wait(timeout: .now() + 60) == .success, "the recognitions are stuck")
+        #expect(recognised.count == count)
+    }
+
+    final class Recognised: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func add() { lock.withLock { value += 1 } }
+        var count: Int { lock.withLock { value } }
+    }
+
     @Test func noTruncationNoteWhenAllPagesAreRead() async throws {
         let url = Self.scannedPDF([[Block(lines: ["Only page gamma"], top: 100)]])
         defer { try? FileManager.default.removeItem(at: url) }
