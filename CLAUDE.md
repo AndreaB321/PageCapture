@@ -16,7 +16,9 @@ scrolling webpage, or one frame or scrolling area of it, and saves it as HTML, P
 | App and DMG | `scripts/make-dmg.sh` | runs fetch-tools first |
 
 Without `build/tools`, `ToolsTests` and `VideoDownloaderTests` are skipped (29 tests): a green run
-says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing anything in
+says "0 failures" with those skips. Markdown output needs MarkItDown: without `build/tools/markitdown`
+(`scripts/fetch-tools.sh markitdown`) `MarkdownExporterTests`, `DocumentConverterTests` and the
+Markdown tests of `CaptureExporterTests` and `CaptureIntegrationTests` are skipped too. Run `scripts/fetch-tools.sh` before changing anything in
 `Tools.swift` or `VideoDownloader.swift`, so those tests actually run.
 
 ## Layout
@@ -32,7 +34,9 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
     MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (`(deny
     default)`: reads only the runtime, its work directory and system libraries, writes only in its
     work directory, no network, no child processes); runs the `pagecapture-ocr` helper, under its
-    own profile, on PDFs without text; called by `DocumentExporter`. Fixtures: `scripts/make-document-fixtures.sh`.
+    own profile, on PDFs without text. Called by `DocumentExporter` and by `MarkdownExporter`
+    (`markdown(forCapturedPageHTML:)`: `markdown.js` turns the capture into semantic HTML, MarkItDown
+    writes the Markdown). Fixtures: `scripts/make-document-fixtures.sh`.
   - `DocumentSource`: pure; a frame's or page's URL (+ MIME) → the original document to save, unwrapping Office/Google viewers.
   - `DocumentDownloader`: streams the original with the browser's cookies, 500 MB cap, magic-byte check.
   - `DocumentExporter`: writes `Name/Name.<ext>` and/or `Name/Name.md` (via `DocumentConverter`) for a document save.

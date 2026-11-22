@@ -19,6 +19,8 @@ public struct ExportResult: Equatable, Sendable {
     public var documentFallback: DocumentDownloadError?
     /// Whether the fallback captured the whole page (the page itself was the document) rather than a frame.
     public var documentFallbackIsWholePage = false
+    /// Why the Markdown could not be written (the other formats were), e.g. "The conversion took too long."
+    public var markdownFailure: String?
 
     public var savedVideoCount: Int { videos.values.filter { $0.outcome == .saved }.count }
     public var protectedVideoCount: Int { videos.values.filter { $0.outcome == .protected }.count }
@@ -39,6 +41,10 @@ public struct ExportResult: Equatable, Sendable {
         if !failedImages.isEmpty {
             let count = failedImages.count
             notes.append("\(count) image\(count == 1 ? "" : "s") could not be downloaded")
+        }
+        if let markdownFailure {
+            let reason = markdownFailure.hasSuffix(".") ? String(markdownFailure.dropLast()) : markdownFailure
+            notes.append("Markdown could not be written: \(reason)")
         }
         if let documentMarkdownFailure { notes.append(documentMarkdownFailure.note) }
         if let documentFallback {
@@ -113,11 +119,27 @@ public enum CaptureExporter {
             result.html = url
         }
         if formats.contains(.markdown) {
-            let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: images.relativePaths,
-                                                               videos: result.videos)
-            let url = folder.appendingPathComponent("\(name).md")
-            try Data(markdown.utf8).write(to: url, options: .atomic)
-            result.markdown = url
+            let converter = DocumentConverter(
+                pythonURL: tools.helpersDirectory.appendingPathComponent("markitdown/bin/python3"))
+            // A failed conversion leaves the Markdown out and the other formats are still written;
+            // the result says why.
+            let markdown: String?
+            do {
+                markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: images.relativePaths,
+                                                               videos: result.videos, converter: converter)
+            } catch {
+                try Task.checkCancellation()
+                // Only a conversion error's message is written for the user; any other error can
+                // carry a type name or a path.
+                result.markdownFailure = (error as? DocumentConversionError)?.localizedDescription
+                    ?? "The Markdown converter failed."
+                markdown = nil
+            }
+            if let markdown {
+                let url = folder.appendingPathComponent("\(name).md")
+                try Data(markdown.utf8).write(to: url, options: .atomic)
+                result.markdown = url
+            }
         }
         if formats.contains(.pdf) {
             let url = folder.appendingPathComponent("\(name).pdf")

@@ -279,10 +279,10 @@ one with its version, licence, what it contains and where its source is. The app
 and the licence texts in `Contents/Resources/ThirdPartyNotices/`.
 
 The app also carries a Python runtime with Microsoft [MarkItDown](https://github.com/microsoft/markitdown)
-(MIT) in `Contents/Resources/markitdown`, built by `scripts/fetch-tools.sh markitdown`. It turns
-saved documents into Markdown (see [Documents](#documents)). `swift run PageCapture` has no bundled
-runtime, so there a document's Markdown fails and the original is kept; build the app with
-`scripts/build-app.sh` to try it.
+(MIT) in `Contents/Resources/markitdown`, built by `scripts/fetch-tools.sh markitdown`. It writes
+the Markdown of each capture and turns saved documents into Markdown (see [Documents](#documents)).
+`swift run PageCapture` has no bundled runtime, so there Markdown cannot be written (the other
+formats and a document's original are still saved); build the app with `scripts/build-app.sh` to try it.
 
 PageCapture uses code of [FFmpeg](https://ffmpeg.org) licensed under the
 [LGPLv2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html), and the MarkItDown runtime's

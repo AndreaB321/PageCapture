@@ -208,7 +208,8 @@ final class CaptureIntegrationTests: XCTestCase {
 
     func testMarkdownOfExpandedCaptureHasHeadersAndPanelsInOrder() async throws {
         let content = try await captureAccordions()
-        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:])
+        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:],
+                                                           converter: MarkdownExporterTests.converter())
         assertInOrder(markdown, Self.accordionOrder)
         XCTAssertFalse(markdown.contains("Menu item"), markdown)
     }
@@ -285,7 +286,8 @@ final class CaptureIntegrationTests: XCTestCase {
 
     func testExportsOfTabCaptureHaveEveryPanelUnderItsTitle() async throws {
         let content = try await captureTabs()
-        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:])
+        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:],
+                                                           converter: MarkdownExporterTests.converter())
         assertInOrder(markdown, [
             "## Model sources", "### The Source - Model Hubs", "- Hub bullet one",
             "### The Service - Cloud AI Platforms", "Most businesses will not use models directly from a hub.",
@@ -504,7 +506,8 @@ final class CaptureIntegrationTests: XCTestCase {
             """, in: harness, frame: nil)
         XCTAssertEqual(state, #"["none","none","none"]"#, "the page hid the panels and the teaser again")
 
-        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:])
+        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:],
+                                                           converter: MarkdownExporterTests.converter())
         for (name, text) in [("HTML", content.html), ("Markdown", markdown)] {
             for language in ["Deutsch", "Français", "Español", "example.org"] {
                 XCTAssertFalse(text.contains(language), "\(name) has the hidden dropdown's \(language): \(text)")
@@ -533,7 +536,8 @@ final class CaptureIntegrationTests: XCTestCase {
                                        in: harness, frame: nil)
         XCTAssertEqual(marks, "0", "the page is left without capture marks")
 
-        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:])
+        let markdown = try await MarkdownExporter.markdown(fromHTML: content.html, images: [:],
+                                                           converter: MarkdownExporterTests.converter())
         assertInOrder(markdown, [
             "## Vetting AI tools\n\n",
             "\n\n### Step 1: The 5-Minute Enterprise Vetting\n\n**Quick check:** look at their website first.\n\n",
