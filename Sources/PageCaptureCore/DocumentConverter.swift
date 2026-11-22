@@ -297,6 +297,17 @@ public struct DocumentConverter: Sendable {
 
             _CustomMarkdownify.escape = escape
 
+            _convert_pre = _CustomMarkdownify.convert_pre
+
+            def convert_pre(self, el, text, *args, **kwargs):
+                out = _convert_pre(self, el, text, *args, **kwargs)
+                fence = "`" * max([3] + [len(run) + 1 for run in re.findall("`+", text or "")])
+                if fence != "```" and out.startswith("\\n\\n```") and out.endswith("```\\n\\n"):
+                    out = "\\n\\n" + fence + out[5:-5] + fence + "\\n\\n"
+                return out
+
+            _CustomMarkdownify.convert_pre = convert_pre
+
             def code_language(el):
                 for node in (el, el.find("code")):
                     for name in (node.get("class") or []) if node is not None else []:

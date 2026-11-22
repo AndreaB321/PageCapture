@@ -89,6 +89,12 @@ final class MarkdownExporterTests: XCTestCase {
         XCTAssertEqual(markdown, "```swift\nlet a = 1\n```\n\n```js\nf()\n```\n")
     }
 
+    func testCodeBlockContainingAFenceGetsALongerFence() async throws {
+        let markdown = try await self.markdown(
+            fromHTML: "<pre><code>before\n```\nafter</code></pre>", images: [:])
+        XCTAssertEqual(markdown, "````\nbefore\n```\nafter\n````\n")
+    }
+
     func testTextThatLooksLikeMarkdownBlocksStaysText() async throws {
         let markdown = try await self.markdown(
             fromHTML: "<p>1. Not a list</p><p># Not a heading</p><p>- Not a bullet</p><p>&lt;b&gt;not bold&lt;/b&gt;</p>",
