@@ -207,9 +207,12 @@ public struct DocumentConverter: Sendable {
     /// collates with it); writing in the work directory and to /dev/null; reading sysctls; and
     /// opening IOSurfaces (Vision always draws into IOSurface-backed buffers) and the GPU's user
     /// client (on macOS 27 Vision recognises no text at all without it, even in `.fast` mode with
-    /// every stage set to the CPU). The Neural Engine stays denied, which is why OCR uses `.fast`.
-    /// As for Python, there is no network, no
-    /// child process, no Mach service and no file of the user's, and the paths come in as
+    /// every stage set to the CPU). On a virtual Mac (a CI runner) the GPU is paravirtual: its user
+    /// client is `AppleParavirtDeviceUserClient`, and Metal compiles Vision's shaders at run time
+    /// through the `com.apple.MTLCompilerService` XPC service (it has no shader cache in the
+    /// sandbox); without either, Vision finds no text there. The Neural Engine stays denied, which
+    /// is why OCR uses `.fast`. As for Python, there is no network, no child process and no file
+    /// of the user's, no Mach service other than Metal's compiler, and the paths come in as
     /// parameters.
     static let ocrSandboxProfile = """
         (version 1)
@@ -222,6 +225,8 @@ public struct DocumentConverter: Sendable {
         (allow sysctl-read)
         (allow iokit-open-user-client (iokit-user-client-class "IOSurfaceRootUserClient"))
         (allow iokit-open-user-client (iokit-user-client-class "AGXDeviceUserClient"))
+        (allow iokit-open-user-client (iokit-user-client-class "AppleParavirtDeviceUserClient"))
+        (allow mach-lookup (xpc-service-name "com.apple.MTLCompilerService"))
         (allow file-read* (subpath "/usr/share/icu"))
         """
 
