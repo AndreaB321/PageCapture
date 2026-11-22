@@ -22,14 +22,17 @@ One target per capture:
   Wikipedia's "Appearance" settings); its title, figures, tables and expanded panels always stay,
   and nothing is left out when the furniture would hold most of its text. Its highlight outlines
   what is captured,
-- the whole page.
+- the whole page,
+- an embedded document (see "Documents"): a PDF, Word, Excel or PowerPoint file shown in an
+  `<iframe>`/`<frame>`/`<embed>`/`<object>`, or the page itself being a PDF. The app saves the
+  original file and/or its Markdown instead of capturing the frame as a page.
 
 ## Shortcut and banner
 
 A single shortcut, **⌘⇧S**, works while the app is frontmost:
 
 1. Idle → press ⌘⇧S → **picker mode**. Banner: "Pick a frame, scrolling area or article… (Return = whole page, Esc = cancel)".
-   The element under the mouse (frame, scrollable area or main article) is highlighted.
+   The element under the mouse (frame, scrollable area, main article or embedded document) is highlighted.
    Clicking a highlighted target picks it; clicking outside any target, or pressing Return,
    picks the whole page. Esc, or ⌘⇧S again, cancels back to idle.
 2. Target picked → **capturing**. Banner: "Capturing…". The app auto-scrolls the target from the top
@@ -42,6 +45,8 @@ A single shortcut, **⌘⇧S**, works while the app is frontmost:
    shown (it is empty, shows a loading indicator or its content is still growing) is waited for, up
    to a time limit per panel and in all per capture, before it is collected. Links that navigate,
    menus/popups and form submits are never clicked.
+   A picked document is not scrolled: the banner says "Downloading document…" while the app
+   downloads the original (see "Documents"); ⌘⇧S cancels the download.
 3. Capture ends when the bottom is reached and no more content loads, or when the user presses
    ⌘⇧S again (keeps what was collected). The banner disappears and the save dialog opens.
 
@@ -50,7 +55,9 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
 ## Saving
 
 - A Finder save panel lets the user name the capture and tick any of three formats: **HTML**,
-  **PDF**, **Markdown** (at least one). The ticked set is remembered for the next save.
+  **PDF**, **Markdown** (at least one). The ticked set is remembered for the next save. For a
+  document the panel offers **Original** and **Markdown** instead (see "Documents"), remembered
+  separately from the page formats.
 - Output: a folder `Name/` containing `Name.html`, `Name.pdf` and/or `Name.md` (the same `Name`
   for each), plus `images/` holding the original image files (from `<img>`/`<picture>`; CSS
   backgrounds are out of scope).
@@ -70,6 +77,32 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   selectable, links clickable. Tables and code blocks wider than the page are fitted to the page
   width: code lines wrap, table cells wrap their text, and a table that is still too wide (content
   that cannot wrap) is scaled down. No text is cut at the right margin.
+
+## Documents
+
+- A document target is an `<iframe>`/`<frame>`/`<embed>`/`<object>`, or the page itself, whose
+  http(s) URL names a supported file (by the extension of its path, in any case, ignoring query and
+  fragment, or by its MIME type). Supported types: PDF (`.pdf`), Word (`.docx`), PowerPoint
+  (`.pptx`), Excel (`.xlsx`, `.xls`) and Outlook messages (`.msg`). Legacy `.doc` and `.ppt` are
+  not supported.
+- Online viewers count as documents when the original's URL is in the viewer's URL: Office Online
+  (`view.officeapps.live.com/op/embed.aspx?src=<url>` or `…/op/view.aspx?src=<url>`) and Google
+  (`docs.google.com/viewer?url=<url>`, `docs.google.com/gview?url=<url>`,
+  `drive.google.com/viewerng/viewer?url=<url>`). The original's URL is percent-decoded; a viewer
+  inside a viewer is unwrapped once at most.
+- Nothing is scrolled. The app downloads the original with the browser's cookies and the page as
+  referer, up to 500 MB, and checks that the file is what its type says (a PDF starts with
+  `%PDF-`, `.docx`/`.pptx`/`.xlsx` are ZIP packages, `.xls`/`.msg` are OLE files).
+- Output: a folder `Name/` with `Name.<ext>` (the original, unchanged) and/or `Name.md` (its
+  Markdown, made by the bundled MarkItDown in an isolated helper process). A scanned PDF (no text
+  layer) is read with on-device text recognition.
+- A document with no readable text keeps the original (even when only Markdown was ticked), and
+  the result message says no text was found. When the Markdown cannot be made for another reason,
+  the original is kept too and the message gives the reason (without file paths).
+- When the original cannot be downloaded (a viewer without the original's URL, an HTTP error, a
+  sign-in page instead of the file, larger than 500 MB, an unsupported type such as `.doc`), the
+  app captures the frame as a page instead (scrolling, page save panel) and the result message
+  says why.
 
 ## Videos
 
@@ -94,11 +127,10 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
 - The app also bundles a pinned Python with Microsoft MarkItDown (documents, no audio/video; the runtime makes no
   network calls on its own, and the app only ever passes it local files, though MarkItDown can fetch a
   URL if given one) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
-  a symlink to it. It is the runtime for converting documents to Markdown, coming in a later version;
-  nothing in the app uses it yet.
+  a symlink to it. It is the runtime for converting documents to Markdown (see "Documents").
 - Documents are converted in isolated helper processes with no network and no access to the user's files.
   Scanned PDFs are read with on-device text recognition (macOS Vision, fast mode) in a separate isolated
-  helper. Both are groundwork for a later version; nothing in the app uses them yet.
+  helper.
 
 ## Install
 

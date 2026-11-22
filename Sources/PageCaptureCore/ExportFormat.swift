@@ -1,32 +1,56 @@
 import AppKit
 
-/// One of the formats the save panel offers (SPEC "Saving"), in the panel's order.
+/// What is being saved: the page formats or the document formats are offered (SPEC "Saving", "Documents").
+public enum ExportSaveKind: Sendable {
+    case page
+    case document
+
+    /// The formats the save panel offers, in its order.
+    public var formats: [ExportFormat] {
+        switch self {
+        case .page: [.html, .pdf, .markdown]
+        case .document: [.original, .markdown]
+        }
+    }
+}
+
+/// One of the formats the save panel offers (SPEC "Saving").
 public enum ExportFormat: String, CaseIterable, Sendable {
     case html
     case pdf
     case markdown
+    /// A document's original file, unchanged.
+    case original
+
+    /// The page formats, in the panel's order: the page save panel and its callers predate
+    /// `.original`, which only documents offer (`ExportSaveKind.document.formats`).
+    public static var allCases: [ExportFormat] { ExportSaveKind.page.formats }
 
     public var title: String {
         switch self {
         case .html: "HTML"
         case .pdf: "PDF"
         case .markdown: "Markdown"
+        case .original: "Original"
         }
     }
 }
 
-/// The ticked formats, remembered between saves.
+/// The ticked formats, remembered between saves, separately for pages and documents.
 public enum ExportFormatPreference {
     static let key = "exportFormats"
+    static let documentKey = "documentExportFormats"
     /// The popup's choice before formats were ticked: "pdf", "markdown" or "both".
     static let legacyKey = "exportFormat"
 
-    /// The stored set; on the first run after the change, the old popup's choice.
-    public static func load(from defaults: UserDefaults) -> Set<ExportFormat> {
-        if let stored = defaults.stringArray(forKey: key) {
-            let formats = Set(stored.compactMap(ExportFormat.init(rawValue:)))
+    /// The stored set for `kind`; for pages on the first run after the change, the old popup's choice.
+    public static func load(from defaults: UserDefaults, kind: ExportSaveKind = .page) -> Set<ExportFormat> {
+        let offered = kind.formats
+        if let stored = defaults.stringArray(forKey: kind == .page ? key : documentKey) {
+            let formats = Set(stored.compactMap(ExportFormat.init(rawValue:)).filter(offered.contains))
             if !formats.isEmpty { return formats }
         }
+        if kind == .document { return Set(offered) }
         switch defaults.string(forKey: legacyKey) {
         case "pdf": return [.pdf]
         case "markdown": return [.markdown]
@@ -34,9 +58,15 @@ public enum ExportFormatPreference {
         }
     }
 
-    public static func save(_ formats: Set<ExportFormat>, to defaults: UserDefaults) {
-        defaults.set(ExportFormat.allCases.filter(formats.contains).map(\.rawValue), forKey: key)
-        defaults.removeObject(forKey: legacyKey)
+    public static func save(_ formats: Set<ExportFormat>, to defaults: UserDefaults, kind: ExportSaveKind = .page) {
+        let stored = kind.formats.filter(formats.contains).map(\.rawValue)
+        switch kind {
+        case .page:
+            defaults.set(stored, forKey: key)
+            defaults.removeObject(forKey: legacyKey)
+        case .document:
+            defaults.set(stored, forKey: documentKey)
+        }
     }
 }
 

@@ -32,7 +32,10 @@ says "0 failures" with those skips. Run `scripts/fetch-tools.sh` before changing
     MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (`(deny
     default)`: reads only the runtime, its work directory and system libraries, writes only in its
     work directory, no network, no child processes); runs the `pagecapture-ocr` helper, under its
-    own profile, on PDFs without text; no callers yet. Fixtures: `scripts/make-document-fixtures.sh`.
+    own profile, on PDFs without text; called by `DocumentExporter`. Fixtures: `scripts/make-document-fixtures.sh`.
+  - `DocumentSource`: pure; a frame's or page's URL (+ MIME) → the original document to save, unwrapping Office/Google viewers.
+  - `DocumentDownloader`: streams the original with the browser's cookies, 500 MB cap, magic-byte check.
+  - `DocumentExporter`: writes `Name/Name.<ext>` and/or `Name/Name.md` (via `DocumentConverter`) for a document save.
 - `Sources/PageCaptureOCRKit`: `PDFTextRecognizer`, Vision OCR (`.fast`; the sandbox allows the GPU,
   not the Neural Engine) of image-only PDFs to Markdown, rendered with CoreGraphics, never PDFKit.
   Used by the `pagecapture-ocr` helper, which `DocumentConverter` runs under its own sandbox

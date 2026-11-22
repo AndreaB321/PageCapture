@@ -57,12 +57,13 @@ public final class CaptureController {
         case .picking: "Cancel Picking"
         case .capturing: "Stop Capture"
         case .stopping: "Abort Capture"
+        case .downloadingDocument: "Cancel Download"
         }
     }
 
     public var shortcutEnabled: Bool {
         switch machine.phase {
-        case .idle, .picking, .capturing, .stopping: true
+        case .idle, .picking, .capturing, .stopping, .downloadingDocument: true
         case .saving: false
         }
     }
@@ -165,6 +166,9 @@ public final class CaptureController {
                 self.collected = nil
                 didFinishCapture(collected)
             }
+        case .downloadDocument, .cancelDocumentDownload, .presentDocumentSave:
+            // Document targets are not picked yet: the picker and the save panel come next.
+            break
         }
     }
 

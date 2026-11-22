@@ -4,7 +4,8 @@ import ImageIO
 /// Serves image downloads in tests for `pctest://` and `https://images.test/` URLs, and records the
 /// requests it saw. Paths: `*/missing.*` → 404, `*/login.*` → an HTML page, `*/noext` → JPEG MIME,
 /// `*.css` → `Fixtures/styles/<name>` (empty when there is none), `*.woff2` → a few font bytes,
-/// anything else → a 1×1 PNG.
+/// anything else → a 1×1 PNG. `https://documents.test/<file>` serves `Fixtures/documents/<file>`
+/// (after the `missing` and `login` rules) as `application/octet-stream`, or 404.
 final class FixtureURLProtocol: URLProtocol {
     struct Seen: Sendable {
         var url: URL
@@ -47,7 +48,7 @@ final class FixtureURLProtocol: URLProtocol {
 
     override class func canInit(with request: URLRequest) -> Bool {
         guard let url = request.url else { return false }
-        return url.scheme == "pctest" || url.host == "images.test"
+        return url.scheme == "pctest" || url.host == "images.test" || url.host == "documents.test"
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -66,6 +67,10 @@ final class FixtureURLProtocol: URLProtocol {
             (status, mime, body) = (404, "text/plain", Data("nope".utf8))
         } else if name.hasPrefix("login") {
             (status, mime, body) = (200, "text/html", Data("<html>sign in</html>".utf8))
+        } else if url.host == "documents.test" {
+            let file = Bundle.module.url(forResource: "Fixtures/documents/\(name)", withExtension: nil)
+            (status, mime, body) = file.flatMap { try? Data(contentsOf: $0) }
+                .map { (200, "application/octet-stream", $0) } ?? (404, "text/plain", Data("nope".utf8))
         } else if url.pathExtension == "css" {
             let file = Bundle.module.url(forResource: "Fixtures/styles/\(name)", withExtension: nil)
             (status, mime, body) = (200, "text/css", file.flatMap { try? Data(contentsOf: $0) } ?? Data())

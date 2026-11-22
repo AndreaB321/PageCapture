@@ -98,7 +98,7 @@ public final class PageCaptureBridge {
         let frame: WKFrameInfo?
         switch target {
         case .wholePage: frame = nil
-        case .picked:
+        case .picked, .document: // a document is collected as its frame when it falls back
             guard let pickedFrame else { throw PageCaptureError.nothingPicked }
             frame = pickedFrame
         }

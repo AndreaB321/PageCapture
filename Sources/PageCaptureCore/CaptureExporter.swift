@@ -11,6 +11,12 @@ public struct ExportResult: Equatable, Sendable {
     public var failedImages: [String]
     /// Video index → how it appears in the outputs.
     public var videos: [Int: VideoLink] = [:]
+    /// A document's original (`Name.<ext>`).
+    public var original: URL?
+    /// Why a document's `Name.md` was not written although Markdown was ticked.
+    public var documentMarkdownFailure: DocumentMarkdownFailure?
+    /// Set by the app when a picked document could not be downloaded and its frame was captured as a page.
+    public var documentFallback: DocumentDownloadError?
 
     public var savedVideoCount: Int { videos.values.filter { $0.outcome == .saved }.count }
     public var protectedVideoCount: Int { videos.values.filter { $0.outcome == .protected }.count }
@@ -31,6 +37,10 @@ public struct ExportResult: Equatable, Sendable {
         if !failedImages.isEmpty {
             let count = failedImages.count
             notes.append("\(count) image\(count == 1 ? "" : "s") could not be downloaded")
+        }
+        if let documentMarkdownFailure { notes.append(documentMarkdownFailure.note) }
+        if let documentFallback {
+            notes.append("the document could not be downloaded (\(documentFallback.reason)), so the frame was captured as a page")
         }
         var text = "Saved to \(folder.path)"
         if !notes.isEmpty { text += " (\(notes.joined(separator: "; ")))" }
