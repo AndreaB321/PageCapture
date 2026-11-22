@@ -93,7 +93,7 @@ final class CaptureControllerTests: XCTestCase {
 
         XCTAssertEqual(requests.map(\.kind), [.page])
         XCTAssertTrue(messages[0].hasPrefix("Capture saved"), messages[0])
-        XCTAssertTrue(messages[0].contains("the document could not be downloaded (HTTP 404), so the frame was captured as a page"),
+        XCTAssertTrue(messages[0].contains("the document could not be downloaded (HTTP 404), so the page was captured instead"),
                       messages[0])
         let markdown = try String(contentsOf: folder.appendingPathComponent("Fallback/Fallback.md"), encoding: .utf8)
         XCTAssertTrue(markdown.contains("Fallback page"), markdown)

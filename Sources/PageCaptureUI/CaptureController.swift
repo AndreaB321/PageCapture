@@ -99,6 +99,8 @@ public final class CaptureController {
     func didFinishCapture(_ content: CapturedContent) {
         // The picked document that could not be downloaded, for the message.
         let documentFallback = machine.documentFallback
+        // Whether that document was the page itself (Return, or a click outside any target) or a frame in it.
+        let documentFallbackIsWholePage = bridge.pickedWholePage
         let request = SaveRequest(title: "Save Capture", message: "Creates a folder with the files and an images folder.",
                                   name: ExportNaming.sanitizedName(fromTitle: content.title), kind: .page)
         Task {
@@ -114,6 +116,7 @@ public final class CaptureController {
                         return configuration
                     }
                     result.documentFallback = documentFallback
+                    result.documentFallbackIsWholePage = documentFallbackIsWholePage
                     return result
                 }
             }
@@ -123,9 +126,8 @@ public final class CaptureController {
     /// Saves a downloaded document: save panel with the document formats, then its original and/or
     /// Markdown, then the message (SPEC "Documents").
     private func saveDocument(_ document: DownloadedDocument) {
-        let fileName = document.source.url.deletingPathExtension().lastPathComponent
         let request = SaveRequest(title: "Save Document", message: "Creates a folder with the original and/or its Markdown.",
-                                  name: ExportNaming.sanitizedName(fromTitle: fileName.isEmpty ? webView.title ?? "" : fileName),
+                                  name: ExportNaming.documentName(url: document.source.url, pageTitle: webView.title),
                                   kind: .document, original: document.source.kind)
         Task {
             guard let choice = await chooseSave(request) else {
