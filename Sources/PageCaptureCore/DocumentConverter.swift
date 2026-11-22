@@ -28,6 +28,26 @@ public enum DocumentConversionError: Error, Equatable {
     case unreadableInput
 }
 
+extension DocumentConversionError: LocalizedError {
+    /// A short sentence for the user; never a path or MarkItDown's own message.
+    public var errorDescription: String? {
+        switch self {
+        case .runtimeMissing: "The bundled MarkItDown is missing."
+        case .timedOut: "The conversion took too long."
+        case .failed(_, let message) where message.contains("RecursionError"):
+            "The page is nested too deeply to convert."
+        case .failed: "MarkItDown could not convert it."
+        case .stopped: "The conversion was stopped."
+        case .outputTooLarge: "The Markdown is too large."
+        case .unreadable: "The PDF could not be read."
+        case .noTextFound: "No text was found in the PDF."
+        case .notAFile: "It is not a file."
+        case .inputTooLarge: "The file is too large."
+        case .unreadableInput: "The file could not be read."
+        }
+    }
+}
+
 /// Converts one local file (PDF, DOCX, PPTX, XLSX, HTML, …) to Markdown with the bundled MarkItDown.
 ///
 /// The file is untrusted (downloaded from the web), so it never reaches MarkItDown in place: it is
@@ -107,6 +127,24 @@ public struct DocumentConverter: Sendable {
             }
             if let pdfFallback { return try await pdfFallback(copy) }
             return try await recognise(copy, in: directory)
+        }
+    }
+
+    /// The Markdown for `html`, a captured page's semantic HTML (`markdown.js`), the way
+    /// `MarkdownExporter` wants it (`pageScript`). Runs exactly like `markdown(forFile:)`, on
+    /// `input.html` written in the work directory, without the PDF fallback.
+    func markdown(forCapturedPageHTML html: String) async throws -> String {
+        try Self.checkExecutable(pythonURL)
+        return try await withWorkDirectory { directory in
+            let file = directory.appendingPathComponent("input.html")
+            do {
+                try Data(html.utf8).write(to: file, options: .withoutOverwriting)
+            } catch {
+                throw DocumentConversionError.unreadableInput
+            }
+            let result = try await runSandboxed(pythonRun(Self.pageScript, arguments: [file.path]), in: directory)
+            guard result.exited, result.status == 0 else { throw result.failure }
+            return String(decoding: result.output, as: UTF8.self)
         }
     }
 
@@ -240,6 +278,95 @@ public struct DocumentConverter: Sendable {
         try:
             from markitdown import MarkItDown
             result = MarkItDown(enable_plugins=False).convert_local(sys.argv[1])
+            sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
+        except Exception as e:
+            sys.stderr.write(type(e).__name__ + ": " + str(e) + "\\n")
+            sys.exit(1)
+        """
+
+    /// `convertScript` for a captured page (`markdown(forCapturedPageHTML:)`), with the options
+    /// SPEC "Saving" needs: a line break is a backslash (MarkItDown strips trailing spaces), text
+    /// that Markdown would read as syntax (`<tag>`, `1.`, `#`, `~~`, …) is escaped, as is every
+    /// unescaped `|` in a table cell (also in its code, link URLs and image alt text), bullets are
+    /// `-`, a code block keeps its `language-…` class, and http, https, `mailto:`, `tel:` and
+    /// relative links are written as they are (MarkItDown's own percent-encodes URL paths and keeps
+    /// only http, https and file links; never `javascript:`). Only MarkItDown's HTML converter runs,
+    /// in strict mode: HTML nested too deeply for it fails, instead of coming out as plain text
+    /// without links or images (or, from the next converter, as the raw HTML).
+    static let pageScript = """
+        import sys
+        try:
+            import re
+            import markdownify
+            from urllib.parse import urlsplit
+            from markitdown import MarkItDown
+            from markitdown.converters import HtmlConverter
+            from markitdown.converters._markdownify import _CustomMarkdownify
+
+            _convert_a = _CustomMarkdownify.convert_a
+            # Control characters (a newline would start a new Markdown line), spaces, `<`, `>`,
+            # backslashes and parentheses are percent-encoded in a link's URL.
+            url_unsafe = re.compile(r"[\\x00-\\x20\\x7f<>\\\\()]")
+
+            def convert_a(self, el, text, *args, **kwargs):
+                try:
+                    scheme = urlsplit(el.get("href") or "").scheme.lower()
+                except ValueError:
+                    scheme = None
+                if scheme in ("", "http", "https", "mailto", "tel"):
+                    el["href"] = url_unsafe.sub(lambda m: "%%%02X" % ord(m.group()), el.get("href") or "")
+                    return markdownify.MarkdownConverter.convert_a(self, el, text, *args, **kwargs)
+                # MarkItDown's drops any other scheme but file, so never writes `javascript:`.
+                return _convert_a(self, el, text, *args, **kwargs)
+
+            _CustomMarkdownify.convert_a = convert_a
+
+            unescaped_pipe = re.compile(r"(?<!\\\\)((?:\\\\\\\\)*)\\|")
+
+            def table_cell(convert):
+                def convert_cell(self, el, text, *args, **kwargs):
+                    return convert(self, el, unescaped_pipe.sub(r"\\1\\\\|", text), *args, **kwargs)
+                return convert_cell
+
+            _CustomMarkdownify.convert_td = table_cell(_CustomMarkdownify.convert_td)
+            _CustomMarkdownify.convert_th = table_cell(_CustomMarkdownify.convert_th)
+
+            special = re.compile(r"[\\\\`*_\\[\\]]|<(?=[A-Za-z/!?])|~")
+            block_start = re.compile(r"^(\\s*)(#{1,6}(?:\\s|$)|>|(?:-+|=+|\\+)(?:\\s|$))")
+            list_start = re.compile(r"^(\\s*\\d{1,9})([.)](?:\\s|$))")
+            inline_only = {"h1", "h2", "h3", "h4", "h5", "h6", "td", "th"}
+
+            def escape(self, text, parent_tags):
+                text = special.sub(r"\\\\\\g<0>", text)
+                if not parent_tags & inline_only:
+                    text = list_start.sub(r"\\1\\\\\\2", block_start.sub(r"\\1\\\\\\2", text))
+                return text
+
+            _CustomMarkdownify.escape = escape
+
+            _convert_pre = _CustomMarkdownify.convert_pre
+
+            def convert_pre(self, el, text, *args, **kwargs):
+                out = _convert_pre(self, el, text, *args, **kwargs)
+                fence = "`" * max([3] + [len(run) + 1 for run in re.findall("`+", text or "")])
+                if fence != "```" and out.startswith("\\n\\n```") and out.endswith("```\\n\\n"):
+                    out = "\\n\\n" + fence + out[5:-5] + fence + "\\n\\n"
+                return out
+
+            _CustomMarkdownify.convert_pre = convert_pre
+
+            def code_language(el):
+                for node in (el, el.find("code")):
+                    for name in (node.get("class") or []) if node is not None else []:
+                        if name.startswith("language-"):
+                            return name[len("language-"):]
+                return ""
+
+            converter = MarkItDown(enable_builtins=False, enable_plugins=False)
+            converter.register_converter(HtmlConverter())
+            result = converter.convert_local(
+                sys.argv[1], strict=True, newline_style="backslash", bullets="-",
+                code_language_callback=code_language)
             sys.stdout.buffer.write((result.text_content or "").encode("utf-8"))
         except Exception as e:
             sys.stderr.write(type(e).__name__ + ": " + str(e) + "\\n")

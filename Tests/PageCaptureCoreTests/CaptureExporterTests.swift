@@ -18,6 +18,15 @@ final class CaptureExporterTests: XCTestCase {
         try? FileManager.default.removeItem(at: parent)
     }
 
+    /// `build/tools` as the bundled tools, for exports that write Markdown with its MarkItDown;
+    /// skips the test when it is missing.
+    private func markdownTools() throws -> Tools {
+        _ = try MarkdownExporterTests.converter()
+        let helpers = DocumentConverterTests.python.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return Tools(helpersDirectory: helpers, supportDirectory: parent.appendingPathComponent("support"))
+    }
+
     func testExportsBothFormatsWithImagesIntoNamedFolder() async throws {
         var content = PDFExporterTests.longContent()
         content.html += #"<p><img src="pctest://main.test/img/missing.png" alt="gone"></p>"#
@@ -27,7 +36,7 @@ final class CaptureExporterTests: XCTestCase {
         let result = try await CaptureExporter.export(
             content, formats: [.pdf, .markdown], to: folder,
             webViewConfiguration: PDFExporterTests.configuration,
-            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4)
+            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4, tools: markdownTools())
 
         let fm = FileManager.default
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: folder.path).sorted(), ["My Capture.md", "My Capture.pdf", "images"])
@@ -203,7 +212,7 @@ final class CaptureExporterTests: XCTestCase {
         let result = try await CaptureExporter.export(
             content, formats: [.html, .pdf, .markdown], to: folder,
             webViewConfiguration: PDFExporterTests.configuration,
-            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4)
+            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4, tools: markdownTools())
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(),
                        ["Everything.html", "Everything.md", "Everything.pdf", "images"])
         XCTAssertNotNil(result.html)
@@ -224,7 +233,7 @@ final class CaptureExporterTests: XCTestCase {
         let result = try await CaptureExporter.export(
             content, formats: [.markdown], to: folder,
             webViewConfiguration: PDFExporterTests.configuration,
-            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4)
+            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4, tools: markdownTools())
 
         XCTAssertEqual(result.failedImages, [])
         let markdown = try String(contentsOf: folder.appendingPathComponent("Pipe.md"), encoding: .utf8)
@@ -241,7 +250,7 @@ final class CaptureExporterTests: XCTestCase {
         _ = try await CaptureExporter.export(
             content, formats: [.markdown], to: folder,
             webViewConfiguration: PDFExporterTests.configuration,
-            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4)
+            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4, tools: markdownTools())
 
         let markdown = try String(contentsOf: folder.appendingPathComponent("Avif.md"), encoding: .utf8)
         XCTAssertTrue(markdown.contains("![hero](images/001-hero.png)"), markdown)
@@ -255,10 +264,30 @@ final class CaptureExporterTests: XCTestCase {
                                       stylesheets: [], imageURLs: [])
         let result = try await CaptureExporter.export(
             content, formats: [.markdown], to: folder, webViewConfiguration: PDFExporterTests.configuration,
-            sessionConfiguration: FixtureURLProtocol.configuration())
+            sessionConfiguration: FixtureURLProtocol.configuration(), tools: markdownTools())
         XCTAssertNil(result.pdf)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["Notes.md"])
         XCTAssertEqual(result.summary, "Saved to \(folder.path)")
+    }
+
+    func testMarkdownFailureStillWritesTheOtherFormats() async throws {
+        let folder = parent.appendingPathComponent("NoMarkItDown")
+        let content = CapturedContent(html: "<p>Hi</p>", baseURL: URL(string: "pctest://main.test/")!, title: "",
+                                      stylesheets: [], imageURLs: [])
+        let empty = parent.appendingPathComponent("no-helpers")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        let result = try await CaptureExporter.export(
+            content, formats: [.html, .pdf, .markdown], to: folder,
+            webViewConfiguration: PDFExporterTests.configuration,
+            sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4,
+            tools: Tools(helpersDirectory: empty, supportDirectory: parent.appendingPathComponent("support")))
+        XCTAssertNotNil(result.html)
+        XCTAssertNotNil(result.pdf)
+        XCTAssertNil(result.markdown)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(),
+                       ["NoMarkItDown.html", "NoMarkItDown.pdf"])
+        XCTAssertEqual(result.summary,
+                       "Saved to \(folder.path) (Markdown could not be written: The bundled MarkItDown is missing)")
     }
 
     func testCancelledExportStopsBeforeWritingTheOutputs() async throws {
@@ -278,6 +307,28 @@ final class CaptureExporterTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [])
     }
 
+    /// Cancelled while MarkItDown runs: the export throws instead of writing the other formats with a
+    /// Markdown failure. The page is large so the conversion outlasts the delay.
+    func testExportCancelledDuringMarkdownConversionThrows() async throws {
+        let tools = try markdownTools()
+        let folder = parent.appendingPathComponent("QuitMidway")
+        let html = String(repeating: "<p>Some <b>text</b> and <a href=\"https://x.test/\">a link</a>.</p>", count: 40_000)
+        let content = CapturedContent(html: html, baseURL: URL(string: "pctest://main.test/")!, title: "",
+                                      stylesheets: [], imageURLs: [])
+        let task = Task {
+            try await CaptureExporter.export(
+                content, formats: [.markdown, .pdf], to: folder, webViewConfiguration: PDFExporterTests.configuration,
+                sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4, tools: tools)
+        }
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        task.cancel()
+        do {
+            let result = try await task.value
+            XCTFail("expected CancellationError, got \(result)")
+        } catch is CancellationError {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("QuitMidway.pdf").path))
+    }
+
     func testVideosAreDownloadedAndCounted() async throws {
         let folder = parent.appendingPathComponent("Clips")
         let page = "pctest://main.test/"
@@ -290,7 +341,7 @@ final class CaptureExporterTests: XCTestCase {
             ])
         let result = try await CaptureExporter.export(
             content, formats: [.markdown], to: folder, webViewConfiguration: PDFExporterTests.configuration,
-            sessionConfiguration: FixtureURLProtocol.configuration())
+            sessionConfiguration: FixtureURLProtocol.configuration(), tools: markdownTools())
         XCTAssertEqual(result.videos[0]?.outcome, .protected)
         XCTAssertEqual(result.videos[1]?.outcome, .failed("No video source was found"))
         XCTAssertEqual(result.summary, "Saved to \(folder.path) (1 video protected (linked), 1 failed)")

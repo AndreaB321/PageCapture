@@ -1,20 +1,24 @@
-// PageCaptureMarkdown: converts a captured HTML fragment to Markdown.
-// Parses with DOMParser (inert: no scripts run, no images load), so it needs a DOM but no network.
+// PageCaptureMarkdown: rewrites a captured HTML fragment as plain, semantic HTML, which the bundled
+// MarkItDown then writes as Markdown (MarkdownExporter). This script understands the page; MarkItDown
+// only writes what it is given. Parses with DOMParser (inert: no scripts run, no images load), so it
+// needs a DOM but no network.
 //
-//   PageCaptureMarkdown.convert(html, images) -> string
+//   PageCaptureMarkdown.semanticHTML(html, images, videos) -> string (the body's HTML)
 //     images: { "<absolute image URL>": "images/<file>" } for the images that downloaded; any other
 //     image keeps its remote URL.
-//   videos: { "<N>": { href, title, poster?, note? } } for the `<figure data-pc-video="N">` that
+//     videos: { "<N>": { href, title, poster?, note? } } for the `<figure data-pc-video="N">` that
 //     capture.js left for each video: the figure becomes its preview image (`poster`, else the
-//     figure's own image) or caption, linking to `href`, then the italic `note` if there is one.
+//     figure's own image) or caption, linking to `href`, then the emphasised `note` if there is one.
 //     Figures without an entry keep their image and caption.
 //
-// The Markdown keeps the content and its structure, not the page's chrome: video player controls,
+// The result keeps the content and its structure, not the page's chrome: video player controls,
 // site navigation, headers and footers, dialogs, menus and empty bullets are left out (see prune()),
 // layout tables are unwrapped into their blocks, tables of marked rows (a ✓, a number or an icon, then
 // the text) become lists (see markerTable()), expanded accordion headers become headings, each tab
 // widget becomes its panels, each under its tab's title (see tabs()), and elements capture.js found
-// styled as headings (`data-pc-heading="N"`) become headings of level N, kept within 2-6.
+// styled as headings (`data-pc-heading="N"`) become headings of level N, kept within 2-6. It holds
+// only what MarkItDown turns into Markdown: headings, paragraphs, lists, block quotes, code blocks,
+// data tables (no merged cells), links, images, emphasis, code and line breaks.
 (function (global) {
   'use strict';
   if (global.PageCaptureMarkdown) return;
@@ -32,8 +36,8 @@
   const TAB_BAR = 'data-pc-tabs';
   // An element the page styles as a heading, with the level it reads as, as capture.js marks it.
   const HEADING_MARK = 'data-pc-heading';
-  // Hard line break placeholder inside inline runs.
-  const BR = '';
+  // Accordion and tab panels: headings inside them do not move the level of the titles around them.
+  const PANEL = '[data-pc-expanded], details, [' + TAB_TITLE + ']';
 
   function isHidden(el) {
     if (el.hasAttribute('hidden')) return true;
@@ -72,15 +76,6 @@
       node.querySelector(BLOCK_SELECTOR + ',[aria-expanded],[' + TAB_TITLE + '],[' + HEADING_MARK + ']') !== null;
   }
 
-  function escapeText(s) {
-    return s.replace(/[\\`*_[\]]/g, '\\$&').replace(/<(?=[A-Za-z/!?])/g, '\\<');
-  }
-
-  // Escapes characters that would start a Markdown block at the beginning of a line.
-  function escapeLineStart(s) {
-    return s.replace(/^(\s*)(#{1,6}\s|>|[-+]\s)/gm, '$1\\$2').replace(/^(\s*\d+)([.)]\s)/gm, '$1\\$2');
-  }
-
   // Percent-encodes one path segment fully, like encodeURIComponent plus the characters it leaves
   // that Markdown or URLs treat specially.
   function encodeSegment(segment) {
@@ -88,13 +83,41 @@
   }
 
   // Relative destinations of saved images and videos are encoded per path segment, so a file name
-  // holding `#`, `?` or `%` is not read as a fragment, a query or an escape.
+  // holding `#`, `?` or `%` is not read as a fragment, a query or an escape. Spaces and parentheses
+  // never reach the Markdown raw, which would end the link.
   function escapeURL(url) {
     if (/^(images|videos)\//.test(url)) return url.split('/').map(encodeSegment).join('/');
     return url.replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29');
   }
 
-  // A captured video's figure as one line, or null when it has no entry in `videos`.
+  // MarkItDown writes an image's alt text as it is: brackets and backslashes are escaped here.
+  function altText(text) {
+    return text.replace(/\s+/g, ' ').trim().replace(/[[\]\\]/g, '\\$&');
+  }
+
+  // ------------------------------------------------- the semantic HTML
+
+  // A new element in `doc` with `attrs` and, optionally, text.
+  function make(ctx, tag, attrs, text) {
+    const el = ctx.doc.createElement(tag);
+    for (const [name, value] of Object.entries(attrs || {})) el.setAttribute(name, value);
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  // Text or an image: what makes a block worth keeping.
+  function hasVisible(el) {
+    return el.textContent.trim() !== '' || el.querySelector('img') !== null;
+  }
+
+  function image(node, ctx) {
+    const src = node.getAttribute('src');
+    if (!src) return null;
+    return make(ctx, 'img', { src: escapeURL(ctx.images[src] || src), alt: altText(node.getAttribute('alt') || '') });
+  }
+
+  // A captured video's figure as a link (around its preview image, else its label), then its note;
+  // null when it has no entry in `videos`.
   function video(el, ctx) {
     const v = ctx.videos[el.getAttribute('data-pc-video')];
     if (!v) return null;
@@ -105,118 +128,99 @@
       const src = img && img.getAttribute('src');
       if (src) poster = ctx.images[src] || src;
     }
-    const target = '(' + escapeURL(v.href) + ')';
-    let md = poster
-      ? '[![' + label.replace(/[[\]\\]/g, '\\$&') + '](' + escapeURL(poster) + ')]' + target
-      : '[' + escapeText(label) + ']' + target;
-    if (v.note) md += ' *(' + escapeText(v.note.replace(/\s+/g, ' ').trim()) + ')*';
-    return md;
+    const link = make(ctx, 'a', { href: escapeURL(v.href) });
+    link.append(poster ? make(ctx, 'img', { src: escapeURL(poster), alt: altText(label) }) : label);
+    const out = [link];
+    if (v.note) out.push(' ', make(ctx, 'em', {}, '(' + v.note.replace(/\s+/g, ' ').trim() + ')'));
+    return out;
   }
 
-  // Moves surrounding whitespace outside a delimiter pair: "<b> x </b>" -> " **x** ".
-  function wrap(content, mark) {
-    const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(content);
-    if (!m[2]) return content;
-    return m[1] + mark + m[2] + mark + m[3];
-  }
-
-  function codeSpan(text) {
-    const runs = text.match(/`+/g) || [];
-    const fence = '`'.repeat(runs.reduce((n, r) => Math.max(n, r.length), 0) + 1);
-    const pad = /^`|`$/.test(text) ? ' ' : '';
-    return fence + pad + text + pad + fence;
-  }
-
-  // Inline Markdown for a node and its descendants. Block descendants are flattened with spaces.
-  function inline(node, ctx) {
-    if (node.nodeType === 3) return escapeText(node.data.replace(/[ \t\n\r\f]+/g, ' '));
-    if (node.nodeType !== 1 || skipped(node)) return '';
-    const tag = node.localName;
-    const children = () => {
-      let s = '';
-      for (const c of node.childNodes) s += inline(c, ctx);
-      return s;
+  // Appends the inline content of `node` to `target`. Block descendants are flattened with spaces.
+  function inline(node, target, ctx) {
+    if (node.nodeType === 3) {
+      target.append(node.data);
+      return;
+    }
+    if (node.nodeType !== 1 || skipped(node)) return;
+    const into = (parent) => {
+      for (const c of node.childNodes) inline(c, parent, ctx);
+      return parent;
     };
-    switch (tag) {
-      case 'br': return BR;
+    switch (node.localName) {
+      case 'br': target.append(make(ctx, 'br')); return;
       case 'img': {
-        const src = node.getAttribute('src');
-        if (!src) return '';
-        const alt = (node.getAttribute('alt') || '').replace(/\s+/g, ' ').trim().replace(/[[\]\\]/g, '\\$&');
-        return '![' + alt + '](' + escapeURL(ctx.images[src] || src) + ')';
+        const img = image(node, ctx);
+        if (img) target.append(img);
+        return;
       }
-      case 'strong': case 'b': return wrap(children(), '**');
-      case 'em': case 'i': case 'cite': case 'dfn': return wrap(children(), '*');
-      case 'del': case 's': case 'strike': return wrap(children(), '~~');
-      case 'code': case 'kbd': case 'samp': case 'tt': {
-        const text = node.textContent.replace(/[ \t\n\r\f]+/g, ' ');
-        return text.trim() ? codeSpan(text) : text;
-      }
+      case 'strong': case 'b': target.append(into(make(ctx, 'strong'))); return;
+      case 'em': case 'i': case 'cite': case 'dfn': target.append(into(make(ctx, 'em'))); return;
+      case 'del': case 's': case 'strike': target.append(into(make(ctx, 'del'))); return;
+      // Inline code is one line: a source line break would start a new block (`# b`, `- y`).
+      case 'code': case 'kbd': case 'samp': case 'tt':
+        target.append(make(ctx, 'code', {}, node.textContent.replace(/[ \t\n\r\f]+/g, ' ')));
+        return;
       case 'a': {
-        const text = children();
         const href = (node.getAttribute('href') || '').trim();
-        if (!href || /^javascript:/i.test(href)) return text;
-        const flat = text.replace(new RegExp(BR, 'g'), ' ');
-        const label = clean(flat);
-        if (!label) return '';
-        const m = /^(\s*)[\s\S]*?(\s*)$/.exec(flat);
-        return m[1] + '[' + label + '](' + escapeURL(href) + ')' + m[2];
+        if (!href || /^javascript:/i.test(href)) into(target);
+        else target.append(into(make(ctx, 'a', { href: escapeURL(href) })));
+        return;
       }
       case 'figure': {
         const v = video(node, ctx);
-        if (v !== null) return ' ' + v + ' ';
-        return ' ' + children() + ' ';
+        target.append(' ');
+        if (v !== null) target.append(...v); else into(target);
+        target.append(' ');
+        return;
       }
-      default: {
-        const s = children();
-        return isBlock(node) ? ' ' + s + ' ' : s;
-      }
+      default:
+        if (isBlock(node)) target.append(' ');
+        into(target);
+        if (isBlock(node)) target.append(' ');
     }
   }
 
-  // Tidies an inline run into one block's text: collapses spaces and turns placeholders into hard breaks.
-  function clean(s) {
-    return s
-      .replace(/ {2,}/g, ' ')
-      .replace(new RegExp(' *' + BR + ' *', 'g'), BR)
-      .replace(new RegExp('^[\\s' + BR + ']+|[\\s' + BR + ']+$', 'g'), '')
-      .replace(new RegExp(BR, 'g'), '  \n');
+  // The inline content of `el`'s children, in a new `tag` element.
+  function inlineOf(el, tag, ctx) {
+    const out = make(ctx, tag);
+    for (const c of el.childNodes) inline(c, out, ctx);
+    return out;
   }
 
-  // A node's whole content as one line of inline Markdown (headings, table cells, captions).
-  function inlineText(node, ctx) {
-    let s = '';
-    for (const c of node.childNodes) s += inline(c, ctx);
-    return clean(s);
+  // Removes the bold around all of `el`'s content, as when the page makes a whole heading bold.
+  function unbold(el) {
+    const parts = Array.from(el.childNodes).filter((n) => n.nodeType !== 3 || n.data.trim());
+    const only = parts.length === 1 ? parts[0] : null;
+    if (only && only.localName === 'strong' && !only.querySelector('strong')) only.replaceWith(...only.childNodes);
   }
 
-  // Block-level Markdown chunks for a container's children: inline runs become paragraphs.
-  function blocks(parent, ctx) {
-    const out = [];
-    let run = '';
+  // Appends the blocks of `parent`'s children to `target`: inline runs become paragraphs.
+  function blocks(parent, target, ctx) {
+    let run = null;
     const flush = () => {
-      const text = escapeLineStart(clean(run));
-      if (text) out.push(text);
-      run = '';
+      if (run && hasVisible(run)) target.append(run);
+      run = null;
     };
     for (const child of parent.childNodes) {
       if (skipped(child)) continue;
       if (isBlock(child)) {
         flush();
-        for (const b of block(child, ctx)) if (b) out.push(b);
+        block(child, target, ctx);
       } else if (wrapsBlocks(child)) {
         flush();
-        for (const b of blocks(child, ctx)) out.push(b);
+        blocks(child, target, ctx);
       } else {
-        run += inline(child, ctx);
+        if (!run) run = make(ctx, 'p');
+        inline(child, run, ctx);
       }
     }
     flush();
-    return out;
   }
 
-  function indent(text, first, rest) {
-    return text.split('\n').map((line, i) => (i === 0 ? first : line ? rest : '') + line).join('\n');
+  // A list item holding one paragraph holds its text directly, so the list stays tight.
+  function tighten(item) {
+    const paragraphs = Array.from(item.children).filter((c) => c.localName === 'p');
+    if (paragraphs.length === 1) paragraphs[0].replaceWith(...paragraphs[0].childNodes);
   }
 
   // Accordion headers and tab titles sit one level below the section they are in, so their panels
@@ -226,12 +230,17 @@
   }
 
   // A tab panel comes out under its tab's title, unless it is empty.
-  function block(el, ctx) {
+  function block(el, target, ctx) {
     const title = el.getAttribute(TAB_TITLE);
-    if (title === null) return content(el, ctx);
-    const heading = escapeText(title.replace(/\s+/g, ' ').trim());
-    const body = content(el, ctx);
-    return heading && body.length ? ['#'.repeat(subsectionLevel(ctx)) + ' ' + heading, ...body] : body;
+    if (title === null) {
+      content(el, target, ctx);
+      return;
+    }
+    const body = make(ctx, 'div');
+    content(el, body, ctx);
+    const text = title.replace(/\s+/g, ' ').trim();
+    if (text && body.childNodes.length) target.append(make(ctx, 'h' + subsectionLevel(ctx), {}, text));
+    target.append(...body.childNodes);
   }
 
   // The level capture.js marked `el` with, kept within 2-6, or 0.
@@ -240,54 +249,62 @@
     return isNaN(n) ? 0 : Math.min(6, Math.max(2, n));
   }
 
-  // Inline Markdown without the bold around all of it, as when the page makes a whole heading bold.
-  function unbold(text) {
-    const m = /^\*\*([\s\S]*)\*\*$/.exec(text);
-    return m && !m[1].includes('**') ? m[1] : text;
+  // Appends `el` as a heading at `level`, unless it has no text; returns whether it did.
+  function heading(el, level, target, ctx, unbolded) {
+    const h = inlineOf(el, 'h' + level, ctx);
+    if (unbolded) unbold(h);
+    if (!hasVisible(h)) return false;
+    target.append(h);
+    return true;
   }
 
-  // `el` as a heading line at `level`, or null when it has no text.
-  function headingLine(el, level, ctx) {
-    const text = unbold(inlineText(el, ctx).replace(/ *\n */g, ' '));
-    return text ? '#'.repeat(level) + ' ' + text : null;
-  }
-
-  function content(el, ctx) {
+  function content(el, target, ctx) {
     const tag = el.localName;
     if (isAccordionHeader(el)) {
-      const text = inlineText(el, ctx).replace(/ *\n */g, ' ');
-      return text ? ['#'.repeat(subsectionLevel(ctx)) + ' ' + text] : [];
+      heading(el, subsectionLevel(ctx), target, ctx, false);
+      return;
     }
-    if (markedLevel(el) && !/^(h[1-6]|table|ul|ol|pre|blockquote)$/.test(tag)) {
-      const line = headingLine(el, markedLevel(el), ctx);
+    const marked = markedLevel(el);
+    if (marked && !/^(h[1-6]|table|ul|ol|pre|blockquote)$/.test(tag)) {
       // Like a real heading, it is the section that accordion headers and tab titles go below.
-      if (line && !el.closest('[data-pc-expanded], details, [' + TAB_TITLE + ']')) ctx.heading = markedLevel(el);
-      return line ? [line] : [];
+      if (heading(el, marked, target, ctx, true) && !el.closest(PANEL)) ctx.heading = marked;
+      return;
     }
     switch (tag) {
-      case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': {
-        const text = inlineText(el, ctx).replace(/ *\n */g, ' ');
-        // Headings inside panels do not move the level of the accordion headers around them.
-        if (text && !el.closest('[data-pc-expanded], details, [' + TAB_TITLE + ']')) ctx.heading = +tag[1];
-        return text ? ['#'.repeat(+tag[1]) + ' ' + text] : [];
-      }
-      case 'hr': return ['---'];
-      case 'pre': return [pre(el)];
+      case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
+        if (heading(el, +tag[1], target, ctx, false) && !el.closest(PANEL)) ctx.heading = +tag[1];
+        return;
+      case 'hr': target.append(make(ctx, 'hr')); return;
+      case 'pre': target.append(pre(el, ctx)); return;
       case 'blockquote': {
-        const body = blocks(el, ctx).join('\n\n');
-        return body ? [body.split('\n').map((l) => (l ? '> ' + l : '>')).join('\n')] : [];
+        const quote = make(ctx, 'blockquote');
+        blocks(el, quote, ctx);
+        if (quote.childNodes.length) target.append(quote);
+        return;
       }
-      case 'ul': case 'ol': return [list(el, ctx)];
-      case 'table': return table(el, ctx);
+      case 'ul': case 'ol': {
+        const out = list(el, ctx);
+        if (out) target.append(out);
+        return;
+      }
+      case 'table': table(el, target, ctx); return;
       case 'figure': {
         const v = video(el, ctx);
-        return v !== null ? [v] : blocks(el, ctx);
+        if (v === null) {
+          blocks(el, target, ctx);
+        } else {
+          const p = make(ctx, 'p');
+          p.append(...v);
+          target.append(p);
+        }
+        return;
       }
-      default: return blocks(el, ctx);
+      default: blocks(el, target, ctx);
     }
   }
 
-  function pre(el) {
+  // A code block: its text, with line breaks, and its language (`language-…` or `lang-…` class).
+  function pre(el, ctx) {
     let text = '';
     const walk = (n) => {
       if (n.nodeType === 3) text += n.data;
@@ -295,34 +312,30 @@
       else if (n.nodeType === 1 && !skipped(n)) for (const c of n.childNodes) walk(c);
     };
     walk(el);
-    text = text.replace(/^\n/, '').replace(/\n$/, '');
     let lang = '';
     for (const n of [el, el.querySelector('code')]) {
       const m = n && /(?:^|\s)(?:language|lang)-([\w+#.-]+)/.exec(n.getAttribute('class') || '');
       if (m) { lang = m[1]; break; }
     }
-    const runs = text.match(/^`{3,}/gm) || [];
-    const fence = '`'.repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
-    return fence + lang + '\n' + text + '\n' + fence;
+    const out = make(ctx, 'pre', lang ? { class: 'language-' + lang } : {});
+    out.append(make(ctx, 'code', {}, text));
+    return out;
   }
 
+  // A list without its empty items (icon-only links, blank bullets), or null when none is left.
   function list(el, ctx) {
-    const ordered = el.localName === 'ol';
-    let n = ordered ? parseInt(el.getAttribute('start') || '1', 10) : 1;
-    if (isNaN(n)) n = 1;
-    const items = [];
-    let loose = false;
+    const out = make(ctx, el.localName);
+    const start = parseInt(el.getAttribute('start') || '', 10);
+    if (el.localName === 'ol' && !isNaN(start)) out.setAttribute('start', String(start));
     for (const li of el.children) {
       if (li.localName !== 'li' || skipped(li)) continue;
-      const marker = ordered ? n++ + '. ' : '- ';
-      const hasParagraphs = Array.from(li.children).some((c) => c.localName === 'p');
-      loose = loose || hasParagraphs;
-      const body = blocks(li, ctx).join(hasParagraphs ? '\n\n' : '\n');
-      // Icon-only links and empty items would be bare bullets.
-      if (!body.trim()) continue;
-      items.push(indent(body, marker, ' '.repeat(marker.length)));
+      const item = make(ctx, 'li');
+      blocks(li, item, ctx);
+      if (!hasVisible(item)) continue;
+      tighten(item);
+      out.append(item);
     }
-    return items.join(loose ? '\n\n' : '\n');
+    return out.children.length ? out : null;
   }
 
   function rowsOf(table) {
@@ -452,75 +465,89 @@
   }
 
   // A marker table's caption or title row: a heading when capture.js marked it as one, else bold.
-  function titleBlocks(el, ctx) {
+  function titleBlocks(el, target, ctx) {
     const level = markedLevel(el);
     if (level) {
-      const line = headingLine(el, level, ctx);
-      return line ? [line] : [];
+      heading(el, level, target, ctx, true);
+      return;
     }
-    if (el.querySelector('[' + HEADING_MARK + ']')) return blocks(el, ctx);
-    const text = unbold(inlineText(el, ctx).replace(/ *\n */g, ' '));
-    if (!text) return [];
-    return [text.includes('**') ? escapeLineStart(text) : '**' + text + '**'];
+    if (el.querySelector('[' + HEADING_MARK + ']')) {
+      blocks(el, target, ctx);
+      return;
+    }
+    const p = inlineOf(el, 'p', ctx);
+    unbold(p);
+    if (!hasVisible(p)) return;
+    if (!p.querySelector('strong')) {
+      const bold = make(ctx, 'strong');
+      bold.append(...p.childNodes);
+      p.append(bold);
+    }
+    target.append(p);
   }
 
   // A marker table as a list: numbers give an ordered list; other text markers stay at the start of
   // their item (except bullets, which the list's own bullet replaces); an icon is dropped.
-  function markerList(caption, found, ctx) {
-    const out = caption ? titleBlocks(caption, ctx) : [];
-    for (const cell of found.titles) out.push(...titleBlocks(cell, ctx));
+  function markerList(caption, found, target, ctx) {
+    if (caption) titleBlocks(caption, target, ctx);
+    for (const cell of found.titles) titleBlocks(cell, target, ctx);
     const ordered = found.items.every((it) => it.marker.text && /^\d{1,9}[.)]?$/.test(it.marker.text));
-    const items = [];
-    let loose = false;
+    const out = make(ctx, ordered ? 'ol' : 'ul');
+    if (ordered) out.setAttribute('start', String(parseInt(found.items[0].marker.text, 10)));
     for (const { marker, cell } of found.items) {
-      const body = blocks(cell, ctx);
-      if (!body.length) continue;
-      loose = loose || body.length > 1;
-      let first, rest;
-      if (ordered) {
-        first = parseInt(marker.text, 10) + '. ';
-        rest = ' '.repeat(first.length);
-      } else {
-        const kept = marker.text && !BULLET_MARKER.test(marker.text);
-        first = '- ' + (kept ? escapeLineStart(escapeText(marker.text) + ' ') : '');
-        rest = '  ';
+      const item = make(ctx, 'li');
+      blocks(cell, item, ctx);
+      if (!hasVisible(item)) continue;
+      tighten(item);
+      if (!ordered && marker.text && !BULLET_MARKER.test(marker.text)) {
+        const first = item.firstChild;
+        (first.nodeType === 1 && first.localName === 'p' ? first : item).prepend(marker.text + ' ');
       }
-      items.push(indent(body.join('\n\n'), first, rest));
+      out.append(item);
     }
-    if (items.length) out.push(items.join(loose ? '\n\n' : '\n'));
-    return out;
+    if (out.children.length) target.append(out);
   }
 
-  // A marker table becomes a list (see markerList()); a data table becomes a GFM table (a merged cell
-  // leaves empty cells beside or below it); a layout table becomes the blocks of its cells, row by row.
-  function table(el, ctx) {
+  // A marker table becomes a list (see markerList()); a data table becomes a table with a header row
+  // and no merged cells (a merged cell leaves empty cells beside or below it); a layout table becomes
+  // the blocks of its cells, row by row.
+  function table(el, target, ctx) {
     const rows = rowsOf(el);
     const caption = el.querySelector(':scope > caption');
     const shape = gridOf(rows, () => '', '');
     const markers = markerTable(rows, shape.width);
-    if (markers) return markerList(caption, markers, ctx);
-    const captionText = caption ? inlineText(caption, ctx) : '';
-    const out = captionText ? [escapeLineStart(captionText)] : [];
-    if (!rows.length) return out;
+    if (markers) {
+      markerList(caption, markers, target, ctx);
+      return;
+    }
+    if (caption) {
+      const p = inlineOf(caption, 'p', ctx);
+      if (hasVisible(p)) target.append(p);
+    }
+    if (!rows.length) return;
     if (isLayoutTable(el, rows, shape.width)) {
       for (const row of rows) {
         for (const cell of cellsOf(row)) {
-          const line = markedLevel(cell) ? headingLine(cell, markedLevel(cell), ctx) : null;
-          if (line) out.push(line); else out.push(...blocks(cell, ctx));
+          if (!markedLevel(cell) || !heading(cell, markedLevel(cell), target, ctx, true)) blocks(cell, target, ctx);
         }
       }
-      return out;
+      return;
     }
-    const text = (c) => inlineText(c, ctx).replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|');
-    const { grid, width } = gridOf(rows, text, '');
-    const line = (cells) => {
-      const full = Array.from({ length: width }, (_, i) => cells[i] || '');
-      return '| ' + full.join(' | ') + ' |';
-    };
-    const lines = [line(grid[0]), '| ' + Array(width).fill('---').join(' | ') + ' |'];
-    for (const r of grid.slice(1)) lines.push(line(r));
-    out.push(lines.join('\n'));
-    return out;
+    const { grid, width } = gridOf(rows, (cell) => cell, null);
+    const out = make(ctx, 'table');
+    const sections = [make(ctx, 'thead'), make(ctx, 'tbody')];
+    grid.forEach((cells, r) => {
+      const tr = make(ctx, 'tr');
+      for (let c = 0; c < width; c++) {
+        const cell = cells[c] ? inlineOf(cells[c], r === 0 ? 'th' : 'td', ctx) : make(ctx, r === 0 ? 'th' : 'td');
+        // A Markdown table row is one line.
+        for (const br of Array.from(cell.querySelectorAll('br'))) br.replaceWith(' ');
+        tr.append(cell);
+      }
+      sections[r === 0 ? 0 : 1].append(tr);
+    });
+    out.append(...sections.filter((s) => s.children.length));
+    target.append(out);
   }
 
   // ------------------------------------------------- leaving out the page's chrome
@@ -664,14 +691,45 @@
     }
   }
 
-  function convert(html, images, videos) {
-    const doc = new DOMParser().parseFromString('<!doctype html><html><body>' + html + '</body></html>', 'text/html');
-    const ctx = { images: images || {}, videos: videos || {}, heading: 0 };
-    prune(doc.body);
-    const text = blocks(doc.body, ctx).join('\n\n');
-    return text.replace(/^[ \t]+$/gm, '').replace(/[ \t]+$/gm, (m, offset, s) => (m === '  ' && s[offset + 2] === '\n' ? m : ''))
-      .replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  // Collapses white space the way the page shows it: each run becomes one space, and a space at the
+  // start of a block, after a line break or right after another space (also across elements, as in
+  // `a <b> b</b>`) goes. MarkItDown keeps the line breaks of text and writes the space around an
+  // emphasis outside it, so without this a source line break or a doubled space would reach the
+  // Markdown. Code is left as it is (inline code was made one line by inline()).
+  function collapseSpaces(root) {
+    let afterSpace = true;
+    const walk = (node) => {
+      for (const c of Array.from(node.childNodes)) {
+        if (c.nodeType === 3) {
+          let text = c.data.replace(/[ \t\n\r\f]+/g, ' ');
+          if (afterSpace) text = text.replace(/^ /, '');
+          if (text) afterSpace = text.endsWith(' ');
+          c.data = text;
+        } else if (c.nodeType === 1) {
+          const name = c.localName;
+          if (name === 'pre' || name === 'code' || name === 'img') {
+            afterSpace = name === 'pre';
+            continue;
+          }
+          const breaks = name === 'br' || BLOCK.has(name);
+          if (breaks) afterSpace = true;
+          walk(c);
+          if (breaks) afterSpace = true;
+        }
+      }
+    };
+    walk(root);
   }
 
-  global.PageCaptureMarkdown = Object.freeze({ convert });
+  function semanticHTML(html, images, videos) {
+    const doc = new DOMParser().parseFromString('<!doctype html><html><body>' + html + '</body></html>', 'text/html');
+    const ctx = { doc, images: images || {}, videos: videos || {}, heading: 0 };
+    prune(doc.body);
+    const out = make(ctx, 'div');
+    blocks(doc.body, out, ctx);
+    collapseSpaces(out);
+    return out.innerHTML;
+  }
+
+  global.PageCaptureMarkdown = Object.freeze({ semanticHTML });
 })(globalThis);

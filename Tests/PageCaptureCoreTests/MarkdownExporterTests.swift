@@ -2,13 +2,28 @@ import AppKit
 import XCTest
 @testable import PageCaptureCore
 
-/// Runs `markdown.js` in an off-screen WKWebView against `Fixtures/markdown.html`, which has one of
-/// each supported element, and compares with `Fixtures/markdown.md`.
+/// Runs `markdown.js` in an off-screen WKWebView and the real MarkItDown runtime from
+/// `build/tools/markitdown` (made by `scripts/fetch-tools.sh markitdown`) against
+/// `Fixtures/markdown.html`, which has one of each supported element, and compares with `Fixtures/markdown.md`.
 @MainActor
 final class MarkdownExporterTests: XCTestCase {
     override func setUp() {
         super.setUp()
         _ = NSApplication.shared
+    }
+
+    /// MarkItDown from `build/tools/markitdown`; skips the test when it is missing.
+    nonisolated static func converter() throws -> DocumentConverter {
+        guard FileManager.default.isExecutableFile(atPath: DocumentConverterTests.python.path) else {
+            throw XCTSkip("Run scripts/fetch-tools.sh markitdown first: build/tools/markitdown is missing")
+        }
+        return DocumentConverter(pythonURL: DocumentConverterTests.python)
+    }
+
+    private func markdown(
+        fromHTML html: String, images: [String: String], videos: [Int: VideoLink] = [:]
+    ) async throws -> String {
+        try await MarkdownExporter.markdown(fromHTML: html, images: images, videos: videos, converter: Self.converter())
     }
 
     private func fixture(_ name: String) throws -> String {
@@ -17,7 +32,7 @@ final class MarkdownExporterTests: XCTestCase {
     }
 
     func testConvertsEachElementTypeOfTheFixture() async throws {
-        let markdown = try await MarkdownExporter.markdown(fromHTML: try fixture("markdown.html"), images: [
+        let markdown = try await self.markdown(fromHTML: try fixture("markdown.html"), images: [
             "https://cdn.example.com/a.png": "images/001-a.png",
             "https://cdn.example.com/c.png": "images/003-c.png",
         ])
@@ -32,17 +47,138 @@ final class MarkdownExporterTests: XCTestCase {
     }
 
     func testDropsEmptyIconLinksAndKeepsLinkedImages() async throws {
-        let markdown = try await MarkdownExporter.markdown(
+        let markdown = try await self.markdown(
             fromHTML: #"<p><a href="https://x.test/"><svg></svg></a><a href="https://x.test/p"><img src="https://x.test/i.png" alt=""></a></p>"#,
             images: [:])
         XCTAssertEqual(markdown, "[![](https://x.test/i.png)](https://x.test/p)\n")
     }
 
     func testNestedUnorderedListsAndLooseItems() async throws {
-        let markdown = try await MarkdownExporter.markdown(
+        let markdown = try await self.markdown(
             fromHTML: "<ul><li><p>First para</p><p>more</p></li><li>Next<ul><li>Deep<ul><li>Deeper</li></ul></li></ul></li></ul>",
             images: [:])
-        XCTAssertEqual(markdown, "- First para\n\n  more\n\n- Next\n  - Deep\n    - Deeper\n")
+        XCTAssertEqual(markdown, "- First para\n\n  more\n- Next\n  - Deep\n    - Deeper\n")
+    }
+
+    // MARK: Written by MarkItDown
+
+    func testMailAndPhoneLinksStayLinks() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <p><a href="mailto:team@example.com">Mail us</a>, <a href="tel:+15551234">call</a> or
+            <a href="javascript:alert(1)">click</a>.</p>
+            """, images: [:])
+        XCTAssertEqual(markdown, "[Mail us](mailto:team@example.com), [call](tel:+15551234) or click.\n")
+    }
+
+    func testPipeInATableCellKeepsTheTable() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <table><tr><th>Operator</th><th>Meaning</th></tr><tr><td>a | b</td><td>either</td></tr></table>
+            """, images: [:])
+        XCTAssertEqual(markdown, "| Operator | Meaning |\n| --- | --- |\n| a \\| b | either |\n")
+    }
+
+    func testPipeInCodeOrALinkURLKeepsTheTable() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <table><tr><th>Syntax</th><th>Note</th></tr>
+            <tr><td><code>a|b</code></td><td>code</td></tr>
+            <tr><td><a href="https://x.test/?q=a|b">search</a></td><td>link</td></tr></table>
+            """, images: [:])
+        XCTAssertEqual(markdown, """
+            | Syntax | Note |
+            | --- | --- |
+            | `a\\|b` | code |
+            | [search](https://x.test/?q=a\\|b) | link |
+
+            """)
+    }
+
+    /// A cell with an image makes `markdown.js` unwrap the table, so the alt text is checked on
+    /// MarkItDown's side alone.
+    func testPipeInAnImageAltKeepsTheTable() async throws {
+        let markdown = try await Self.converter().markdown(forCapturedPageHTML: """
+            <table><thead><tr><th>Picture</th><th>Note</th></tr></thead>
+            <tbody><tr><td><img src="https://x.test/i.png" alt="a|b"></td><td>alt</td></tr></tbody></table>
+            """)
+        let row = try XCTUnwrap(markdown.components(separatedBy: "\n").first { $0.hasSuffix("| alt |") })
+        XCTAssertTrue(row.contains("a\\|b"), row)
+        XCTAssertFalse(row.contains("a|b"), row)
+    }
+
+    func testInlineCodeIsOneLine() async throws {
+        let markdown = try await self.markdown(
+            fromHTML: "<p>Run <code>a\n# b</code> now</p><ul><li>Item <code>x\n- y</code></li></ul>", images: [:])
+        XCTAssertEqual(markdown, "Run `a # b` now\n\n- Item `x - y`\n")
+    }
+
+    func testWebLinksAreKeptAsTheyAre() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <p><a href="https://en.wikipedia.org/wiki/C++">C++</a>, <a href="https://x.test/@user">user</a>,
+            <a href="https://x.test/AT&amp;T">AT&amp;T</a>, <a href="https://x.test/a b(c)">space</a></p>
+            """, images: [:])
+        XCTAssertEqual(markdown, "[C++](https://en.wikipedia.org/wiki/C++), [user](https://x.test/@user), "
+            + "[AT&T](https://x.test/AT&T), [space](https://x.test/a%20b%28c%29)\n")
+    }
+
+    func testTildesThatWouldStrikeOrFenceStayText() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>~~~</p><p>a ~~x~~ b, ~5 min</p>", images: [:])
+        XCTAssertEqual(markdown, "\\~\\~\\~\n\na \\~\\~x\\~\\~ b, \\~5 min\n")
+    }
+
+    /// A lone `~` before a struck-through run would make `~~~` and open a code fence.
+    func testTildeBeforeStrikethroughDoesNotOpenAFence() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>~<del>gone</del> rest</p>", images: [:])
+        XCTAssertEqual(markdown, "\\~~~gone~~ rest\n")
+    }
+
+    func testNewlineInALinkURLCannotStartAHeadingOrList() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <p><a href="mailto:a@b.c\n# Injected">mail</a> <a href="https://x.test/a\n- item">web</a></p>
+            """, images: [:])
+        XCTAssertEqual(markdown, "[mail](mailto:a@b.c%0A#%20Injected) [web](https://x.test/a%0A-%20item)\n")
+    }
+
+    func testBacktickFenceInTextStaysText() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>```</p><p>after</p>", images: [:])
+        XCTAssertEqual(markdown, "\\`\\`\\`\n\nafter\n")
+    }
+
+    /// MarkItDown's markdownify recurses once per level; past its limit the conversion fails
+    /// visibly instead of writing plain text without the link.
+    func testTooDeeplyNestedPageFailsVisibly() async throws {
+        let depth = 1000
+        let html = String(repeating: "<blockquote>", count: depth) + #"<a href="https://x.test/">link</a>"#
+            + String(repeating: "</blockquote>", count: depth)
+        do {
+            let markdown = try await self.markdown(fromHTML: html, images: [:])
+            XCTFail("expected a failure, got \(markdown.prefix(200))")
+        } catch let error as DocumentConversionError {
+            XCTAssertEqual(error.localizedDescription, "The page is nested too deeply to convert.")
+        }
+    }
+
+    func testLineBreakSurvives() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>One<br>Two</p>", images: [:])
+        XCTAssertEqual(markdown, "One\\\nTwo\n")
+    }
+
+    func testCodeBlockKeepsItsLanguage() async throws {
+        let markdown = try await self.markdown(
+            fromHTML: #"<pre class="language-swift"><code>let a = 1</code></pre><pre><code class="lang-js">f()</code></pre>"#,
+            images: [:])
+        XCTAssertEqual(markdown, "```swift\nlet a = 1\n```\n\n```js\nf()\n```\n")
+    }
+
+    func testCodeBlockContainingAFenceGetsALongerFence() async throws {
+        let markdown = try await self.markdown(
+            fromHTML: "<pre><code>before\n```\nafter</code></pre>", images: [:])
+        XCTAssertEqual(markdown, "````\nbefore\n```\nafter\n````\n")
+    }
+
+    func testTextThatLooksLikeMarkdownBlocksStaysText() async throws {
+        let markdown = try await self.markdown(
+            fromHTML: "<p>1. Not a list</p><p># Not a heading</p><p>- Not a bullet</p><p>&lt;b&gt;not bold&lt;/b&gt;</p>",
+            images: [:])
+        XCTAssertEqual(markdown, "1\\. Not a list\n\n\\# Not a heading\n\n\\- Not a bullet\n\n\\<b>not bold\\</b>\n")
     }
 
     // MARK: Videos
@@ -55,7 +191,7 @@ final class MarkdownExporterTests: XCTestCase {
 
     func testSavedVideoBecomesItsPreviewImageLinkingToTheLocalFile() async throws {
         let html = "<p>Intro</p>" + figure(0, poster: "https://cdn.x.test/p.jpg") + figure(1)
-        let markdown = try await MarkdownExporter.markdown(fromHTML: html, images: [
+        let markdown = try await self.markdown(fromHTML: html, images: [
             "https://cdn.x.test/p.jpg": "images/002-p.jpg",
         ], videos: [
             // The preview the downloader chose wins over the figure's image.
@@ -74,14 +210,14 @@ final class MarkdownExporterTests: XCTestCase {
     }
 
     func testSavedVideoWithoutPreviewLinksItsCaption() async throws {
-        let markdown = try await MarkdownExporter.markdown(fromHTML: figure(0), images: [:], videos: [
+        let markdown = try await self.markdown(fromHTML: figure(0), images: [:], videos: [
             0: VideoLink(href: "videos/001-clip.mp4", posterFile: nil, title: "Clip", outcome: .saved),
         ])
         XCTAssertEqual(markdown, "[Video: Clip](videos/001-clip.mp4)\n")
     }
 
     func testProtectedVideoLinksTheOriginalWithANote() async throws {
-        let markdown = try await MarkdownExporter.markdown(fromHTML: figure(0), images: [:], videos: [
+        let markdown = try await self.markdown(fromHTML: figure(0), images: [:], videos: [
             0: VideoLink(href: "https://www.youtube.com/watch?v=abc", posterFile: "images/003-t.jpg",
                          title: "Clip", outcome: .protected),
         ])
@@ -90,7 +226,7 @@ final class MarkdownExporterTests: XCTestCase {
     }
 
     func testFailedVideoLinksTheOriginalWithTheReason() async throws {
-        let markdown = try await MarkdownExporter.markdown(fromHTML: figure(0), images: [:], videos: [
+        let markdown = try await self.markdown(fromHTML: figure(0), images: [:], videos: [
             0: VideoLink(href: "https://x.test/live/master.m3u8", posterFile: nil, title: "Clip",
                          outcome: .failed("HTTP 403 for the_stream")),
         ])
@@ -110,7 +246,7 @@ final class MarkdownExporterTests: XCTestCase {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("x".utf8).write(to: file)
         }
-        let markdown = try await MarkdownExporter.markdown(fromHTML: figure(0, title: "Lesson"), images: [:], videos: [
+        let markdown = try await self.markdown(fromHTML: figure(0, title: "Lesson"), images: [:], videos: [
             0: VideoLink(href: videoPath, posterFile: posterPath, title: "Lesson", outcome: .saved),
         ])
         let match = try XCTUnwrap(markdown.firstMatch(of: /\[!\[Video: Lesson\]\((\S+)\)\]\((\S+)\)/))
@@ -125,7 +261,7 @@ final class MarkdownExporterTests: XCTestCase {
     }
 
     func testVideoTitleAndPathsWithSpaces() async throws {
-        let markdown = try await MarkdownExporter.markdown(fromHTML: figure(0, title: "My [best] clip") + figure(1),
+        let markdown = try await self.markdown(fromHTML: figure(0, title: "My [best] clip") + figure(1),
                                                            images: [:], videos: [
             0: VideoLink(href: "videos/001-My best clip (1).mp4", posterFile: "images/004-a b.jpg",
                          title: "My [best] clip", outcome: .saved),
@@ -140,7 +276,7 @@ final class MarkdownExporterTests: XCTestCase {
     }
 
     func testVideoFigureWithoutAnEntryKeepsItsPosterAndCaption() async throws {
-        let markdown = try await MarkdownExporter.markdown(
+        let markdown = try await self.markdown(
             fromHTML: figure(3, poster: "https://cdn.x.test/p.jpg"),
             images: ["https://cdn.x.test/p.jpg": "images/002-p.jpg"],
             videos: [0: VideoLink(href: "videos/001-clip.mp4", posterFile: nil, title: "Clip", outcome: .saved)])
@@ -150,7 +286,7 @@ final class MarkdownExporterTests: XCTestCase {
     // MARK: Page structure
 
     private func md(_ html: String, images: [String: String] = [:], videos: [Int: VideoLink] = [:]) async throws -> String {
-        try await MarkdownExporter.markdown(fromHTML: html, images: images, videos: videos)
+        try await self.markdown(fromHTML: html, images: images, videos: videos)
     }
 
     /// A memo laid out as a one-column table: each row's paragraphs, lists and broken lines stay blocks.
@@ -184,7 +320,7 @@ final class MarkdownExporterTests: XCTestCase {
 
             **Selected Tool Example: ChatGPT, Claude 3.**
 
-            **Technical and Logical Reasoning:** For code.\u{20}\u{20}
+            **Technical and Logical Reasoning:** For code.\\
             **Selected Tool Example: Copilot.**
 
             """)
@@ -263,7 +399,7 @@ final class MarkdownExporterTests: XCTestCase {
             - ✓ **Find the "Enterprise," "Business," or "Trust" page.** The absence of a dedicated enterprise security page is a deal-breaker.
             - ✓ **Look for SOC 2 Compliance.** This should be clearly and proudly stated.
             - ✓ **Check the data policy.** Your data must not train their models.
-            - ✓ **Ask for SSO.** Single sign-on keeps\u{20}\u{20}
+            - ✓ **Ask for SSO.** Single sign-on keeps\\
               access under your control.
 
             Step 2: The Formal Evaluation Scorecard

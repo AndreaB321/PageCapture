@@ -60,8 +60,17 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   their preview and link to `videos/<file>` (or to the original when not saved). Like the
   Markdown, it leaves out the site's header, navigation and footer, unless they hold most of the
   text. It has none of the PDF's print-only changes.
-- Markdown references images by relative path `images/<file>`; links are kept as Markdown links
-  with absolute URLs.
+- Markdown is written by the bundled MarkItDown (below) from the page's cleaned-up HTML: the app
+  decides the content and its structure (the rules here), MarkItDown writes it, in the same
+  isolated process as documents. Line breaks are kept (as `\` at the end of the line), code blocks
+  keep their language, inline code stays on one line, and text that Markdown would read as markup
+  (every `~`, and a line starting with `1.`, `#`, `-` or a fence, `<tag>`, and a `|` anywhere in a table
+  cell, also in its code, link URLs and image alt text) is escaped, so it stays text and the table
+  keeps its columns. If the Markdown cannot be written (MarkItDown fails, or the page is nested too
+  deeply for it), the other formats are still saved and the result message says why.
+- Markdown references images by relative path `images/<file>`; links (web, `mailto:` and `tel:`)
+  are kept as Markdown links with their absolute URLs as the page has them (only control characters,
+  spaces, `<`, `>`, backslashes and parentheses are percent-encoded); `javascript:` links keep only their text.
 - Markdown writes text the page styles as a sub-heading (short, larger or bold-and-larger than the
   body text, not an `h1`-`h6`) as a heading, one level below the page's next larger heading. A
   table whose rows each start with a short marker (✓, a number, a letter) or a small icon becomes
@@ -94,11 +103,12 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
 - The app also bundles a pinned Python with Microsoft MarkItDown (documents, no audio/video; the runtime makes no
   network calls on its own, and the app only ever passes it local files, though MarkItDown can fetch a
   URL if given one) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
-  a symlink to it. It is the runtime for converting documents to Markdown, coming in a later version;
+  a symlink to it. It writes the Markdown of every capture (above), and is the runtime for
+  converting documents to Markdown, coming in a later version.
+- MarkItDown runs in an isolated helper process with no network and no access to the user's files;
+  every Markdown save uses it. Scanned PDFs are read with on-device text recognition (macOS Vision,
+  fast mode) in a separate isolated helper, groundwork for converting documents in a later version;
   nothing in the app uses it yet.
-- Documents are converted in isolated helper processes with no network and no access to the user's files.
-  Scanned PDFs are read with on-device text recognition (macOS Vision, fast mode) in a separate isolated
-  helper. Both are groundwork for a later version; nothing in the app uses them yet.
 
 ## Install
 
