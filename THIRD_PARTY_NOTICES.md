@@ -1,8 +1,9 @@
 # Third-party notices
 
 PageCapture's own code is under the MIT licence (see [LICENSE](LICENSE)). To save videos, the app
-also ships four third-party programs in `PageCapture.app/Contents/Helpers/`: ffmpeg, ffprobe, yt-dlp
-and Deno. PageCapture runs them as separate programs and does not link them into its own code.
+also ships third-party programs in `PageCapture.app/Contents/Helpers/`: ffmpeg, ffprobe, yt-dlp,
+Deno and a Python runtime with MarkItDown (for Markdown conversion of documents). PageCapture runs
+them as separate programs and does not link them into its own code.
 Each one keeps its own licence, described below.
 
 - **Licence texts**: in the app at `PageCapture.app/Contents/Resources/ThirdPartyNotices/`, with this
@@ -94,3 +95,80 @@ All versions and checksums are pinned in `scripts/tool-pins.sh`.
   sources bundle does not contain Deno. Deno's source for this version is published as
   `deno_src.tar.gz` at <https://github.com/denoland/deno/releases/tag/v2.9.8>.
 - **Texts**: `Deno-LICENSE.md`, `V8-LICENSE.txt`, `ICU-LICENSE.txt`.
+
+## MarkItDown 0.1.9 and its Python 3.13.18 runtime (markitdown)
+
+- **Upstream**: <https://github.com/microsoft/markitdown> (MIT), running on CPython from
+  python-build-standalone <https://github.com/astral-sh/python-build-standalone>.
+- **What PageCapture ships**: `Contents/Helpers/markitdown`, a relocatable CPython 3.13.18
+  (python-build-standalone release 20261110, `install_only_stripped` build for aarch64, SHA-256
+  `7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540`) with MarkItDown and the
+  Python packages it needs, installed from the official PyPI wheels, unmodified except for compiled
+  bytecode (every module is precompiled) and an ad-hoc re-signature of their native libraries. The
+  37 wheels and their SHA-256s are listed in `scripts/markitdown-requirements.txt`. pip, IDLE, Tk and the packages'
+  test suites are left out. It runs as a separate process.
+- **Licence**: MarkItDown is under the MIT licence. Python is under the PSF licence 2.0. Each
+  component keeps its own licence, as listed below.
+- **What is inside Python** (OpenSSL, SQLite, expat and mpdecimal versions are those the runtime reports; bzip2,
+  libffi and liblzma versions are read from the static libraries of this build; licence texts are
+  python-build-standalone's `licenses/` for it):
+
+  | Component | Version | Licence |
+  |---|---|---|
+  | Python | 3.13.18 | PSF-2.0 |
+  | OpenSSL | 3.5.9 | Apache-2.0 |
+  | SQLite | 3.53.1 | public domain |
+  | expat | 2.10.0 | MIT |
+  | mpdecimal | 4.0.0 | BSD-2-Clause |
+  | bzip2 | 1.0.8 | bzip2-1.0.6 |
+  | libffi | 3.8.0 | MIT |
+  | liblzma | 5.8.4 | 0BSD / public domain |
+
+- **What is inside the packages**: 
+  the 37 wheels (MarkItDown included) by licence, as the wheels' metadata state it:
+
+  | Licence | Packages |
+  |---|---|
+  | MIT | markitdown 0.1.9, beautifulsoup4 4.15.0, charset-normalizer 3.5.2, et_xmlfile 2.0.0, markdownify 1.2.4, onnxruntime 1.32.0, openpyxl 3.1.5, pdfminer.six 20260107, pdfplumber 0.11.11, python-pptx 1.0.2, soupsieve 4.1.3, urllib3 2.8.0 |
+  | MIT-0 | cffi 2.1.1 |
+  | MIT-CMU | pillow 13.0.0 |
+  | BSD-2-Clause | mammoth 1.13.0, xlsxwriter 3.3.3, cobble 0.1.4 (BSD-2-Clause per its README; the wheel has no licence file) |
+  | BSD-3-Clause | click 8.5.1, idna 3.20, lxml 6.1.3, olefile 0.47 (BSD), pandas 3.1.1, protobuf 7.36.2, pycparser 3.12, python-dateutil 4.0.0 (BSD-3-Clause; also Apache-2.0 per its licence file), xlrd 2.0.2 (BSD), numpy 2.5.5 (with 0BSD, MIT, Zlib, CC0-1.0 parts) |
+  | Apache-2.0 | flatbuffers 25.12.19, magika 1.0.3, requests 2.34.2, tzdata 2026.6 |
+  | Apache-2.0 or BSD-3-Clause | cryptography 50.0.2 |
+  | Apache-2.0 or BSD-2-Clause | packaging 26.3 |
+  | BSD-3-Clause and Apache-2.0 (with dependency licences) | pypdfium2 5.15.2 |
+  | PSF-2.0 | typing_extensions 4.16.0, defusedxml 0.7.1 |
+  | MPL-2.0 | certifi 2026.11.20 |
+
+  Each wheel's own licence text is in `MarkItDown-<component>-<version>.txt`.
+- **C libraries in lxml**: the lxml wheel (`lxml/etree`, `lxml/objectify`) statically links GNU libiconv
+  1.18, under the **GNU Lesser General Public License version 2.1**, and also libxml2 2.14.6 and
+  libxslt 1.1.43 (MIT) and zlib 1.3.2 (zlib licence). The sources bundle contains `libiconv-1.18.tar.gz`
+  (from <https://ftp.gnu.org/pub/gnu/libiconv/>), `libxml2-2.14.6.tar.xz`, `libxslt-1.1.43.tar.xz`
+  (from <https://download.gnome.org/sources/>), `zlib-1.3.2.tar.gz` (from <https://zlib.net/fossils/>),
+  all unmodified, and `lxml-6.1.3.tar.gz`, whose `buildlibxml.py` builds lxml's static libraries.
+- **Using your own libiconv (or libxml2, libxslt, zlib)**: unpack the sdist from the sources bundle
+  and the tarballs into one directory, replacing the one you changed with yours, then build lxml from
+  inside the sdist, without network:
+
+  ```sh
+  python3 setup.py build_ext --static-deps --download-dir <directory with the four tarballs> \
+      --libxml2-version 2.14.6 --libxslt-version 1.1.43 --zlib-version 1.3.2 --libiconv-version 1.18
+  ```
+
+  Set the `--*-version` options to the versions of your own tarballs. Then replace
+  `Contents/Resources/markitdown/lib/python3.13/site-packages/lxml` (`Contents/Helpers/markitdown` is
+  a symlink to it) with the built package, and precompile it, because the runtime's bytecode is
+  checked by hash never and the old bytecode would otherwise stay in use:
+
+  ```sh
+  python3 -I -m compileall -q -f --invalidation-mode unchecked-hash <site-packages>/lxml
+  ```
+
+  Last, re-sign: `codesign --force -s -` on each changed `.so` file, then on `PageCapture.app`.
+- **Source**: the sources bundle contains libiconv, libxml2, libxslt, zlib and lxml as above. The
+  sources of Python (at python-build-standalone's pinned versions) and of the other packages are
+  published by those projects (<https://www.python.org/downloads/>, <https://pypi.org>).
+- **Texts**: `MarkItDown.txt` (what is shipped), `MarkItDown-<component>-<version>.txt` for every
+  component, `LGPL-2.1.txt`.

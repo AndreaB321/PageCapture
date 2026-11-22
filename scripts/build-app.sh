@@ -27,6 +27,14 @@ find "$APP/Contents/Resources/Manual" -name .DS_Store -delete
 for tool in ffmpeg ffprobe yt-dlp deno; do
     cp "build/tools/$tool" "$APP/Contents/Helpers/$tool"
 done
+# The MarkItDown runtime, a Python tree: Helpers/markitdown/bin/python3 -m markitdown. It sits in
+# Resources, because codesign takes every file in Helpers for code and rejects the .py files;
+# Helpers/markitdown links to it.
+. scripts/tool-pins.sh
+[[ -f "$CACHE/markitdown.tree" && "$(md_tree_digest build/tools/markitdown)" == "$(cat "$CACHE/markitdown.tree")" ]] \
+    || { echo "build/tools/markitdown changed since it was built; delete it and rerun fetch-tools.sh markitdown" >&2; exit 1; }
+cp -R build/tools/markitdown "$APP/Contents/Resources/markitdown"
+ln -s ../Resources/markitdown "$APP/Contents/Helpers/markitdown"
 cp build/notices/* "$APP/Contents/Resources/ThirdPartyNotices/"
 cp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/ThirdPartyNotices/"
 cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
@@ -59,9 +67,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Nested code first, each tool on its own, then the app, which seals them in.
+# Nested code first, each tool on its own, then the app, which seals them in. For markitdown that
+# is every Mach-O file in its tree (the interpreter, libpython, extension modules, dylibs).
 for tool in "$APP"/Contents/Helpers/*; do
-    codesign --force -s - "$tool"
+    [[ -L "$tool" ]] || codesign --force -s - "$tool"
+done
+find "$APP/Contents/Resources/markitdown" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) \
+    -print0 | while IFS= read -r -d '' f; do
+    if file -b "$f" | grep -q '^Mach-O'; then
+        codesign --force -s - "$f"
+    fi
 done
 codesign --force -s - "$APP"
 echo "Built $APP"

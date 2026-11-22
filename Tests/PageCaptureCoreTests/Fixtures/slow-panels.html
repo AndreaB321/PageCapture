@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Slow Panels</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+</style>
+</head>
+<body>
+<h1>Course page</h1>
+
+<!-- Content fetched after a tab is selected or a section opened, and inserted LOAD_DELAY ms later.
+     Only the selected tab and the open section hold content (React style): a response that arrives
+     after its tab was deselected or its section closed is dropped. -->
+<script>
+  const LOAD_DELAY = 200;
+  const STREAM_PARTS = 25;
+  // Runs `f` after `ms` on a message loop, not a timer: the test window holds timers back.
+  function after(ms, f) {
+    const at = performance.now() + ms;
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      if (performance.now() < at) return channel.port2.postMessage(0);
+      channel.port1.close();
+      f();
+    };
+    channel.port2.postMessage(0);
+  }
+</script>
+
+<!-- (a) Tabs: the second panel shows a busy spinner until its content arrives; the third has a
+     heading at once and a loader shown only by its class (no aria-busy) until the rest arrives; the
+     fourth gets its content in STREAM_PARTS parts, 100 ms apart, with no loading indicator (2.4 s in
+     all: longer than the test window holds back the collector's first look at the panel, up to about
+     a second, and shorter than its timeout); the fifth panel is
+     replaced by a new element (same id) that shows a busy spinner until its content arrives. -->
+<h2>Slow tabs</h2>
+<div role="tablist">
+  <button id="st1" role="tab" aria-controls="sp1" aria-selected="true">Ready Tab</button>
+  <button id="st2" role="tab" aria-controls="sp2" aria-selected="false">Fetched Tab</button>
+  <button id="st3" role="tab" aria-controls="sp3" aria-selected="false">Class Tab</button>
+  <button id="st4" role="tab" aria-controls="sp4" aria-selected="false">Streamed Tab</button>
+  <button id="st5" role="tab" aria-controls="sp5" aria-selected="false">Replaced Tab</button>
+</div>
+<div id="sp1" role="tabpanel"><p>Ready tab panel text.</p></div>
+<div id="sp2" role="tabpanel" hidden></div>
+<div id="sp3" role="tabpanel" hidden></div>
+<div id="sp4" role="tabpanel" hidden></div>
+<div id="sp5" role="tabpanel" hidden></div>
+
+<!-- (b) Exclusive accordion: an opened section stays empty until its content arrives. -->
+<h2>Slow sections</h2>
+<section id="slow-acc">
+  <button id="sa1" aria-expanded="false" aria-controls="sap1">Fetched Section One</button>
+  <div id="sap1" role="region" hidden></div>
+  <button id="sa2" aria-expanded="false" aria-controls="sap2">Fetched Section Two</button>
+  <div id="sap2" role="region" hidden></div>
+</section>
+
+<!-- (c) Exclusive accordion without aria-controls: an opened section's panel is inserted after its
+     button, busy until its content arrives, and removed when the section closes. -->
+<h2>Inserted sections</h2>
+<section id="insert-acc">
+  <div class="item"><button id="ia1" aria-expanded="false">Inserted Section One</button></div>
+  <div class="item"><button id="ia2" aria-expanded="false">Inserted Section Two</button></div>
+</section>
+
+<h2 id="next">Next section</h2>
+<p>After the slow panels.</p>
+
+<script>
+  const tabContent = { sp1: '<p>Ready tab panel text.</p>', sp2: '<p>Zulu late tab text.</p>',
+    sp3: '<h3>Reviews</h3><p>Whiskey late reviews text.</p>', sp5: '<p>Victor replaced tab text.</p>' };
+  const tabs = document.querySelectorAll('[role="tab"]');
+  const selected = (t) => t.getAttribute('aria-selected') === 'true';
+  for (const t of tabs) {
+    t.addEventListener('click', () => {
+      for (const o of tabs) {
+        const on = o === t;
+        const panel = document.getElementById(o.getAttribute('aria-controls'));
+        o.setAttribute('aria-selected', String(on));
+        panel.hidden = !on;
+        panel.removeAttribute('aria-busy');
+        panel.innerHTML = '';
+      }
+      let panel = document.getElementById(t.getAttribute('aria-controls'));
+      if (panel.id === 'sp1') { panel.innerHTML = tabContent.sp1; return; }
+      if (panel.id === 'sp3') {
+        panel.innerHTML = '<h3>Reviews</h3><div class="is-loading">Please wait</div>';
+      } else if (panel.id === 'sp4') {
+        panel.innerHTML = '<p>Stream part 1.</p>';
+        const part = (n) => after(100, () => {
+          if (!selected(t)) return;
+          panel.insertAdjacentHTML('beforeend', '<p>Stream part ' + n + '.</p>');
+          if (n < STREAM_PARTS) part(n + 1);
+        });
+        part(2);
+        return;
+      } else {
+        if (panel.id === 'sp5') {
+          const fresh = panel.cloneNode(false);
+          panel.replaceWith(fresh);
+          panel = fresh;
+        }
+        panel.setAttribute('aria-busy', 'true');
+        panel.innerHTML = '<div class="spinner">Loading tab…</div>';
+      }
+      setTimeout(() => {
+        if (!selected(t)) return;
+        panel.removeAttribute('aria-busy');
+        panel.innerHTML = tabContent[panel.id];
+      }, LOAD_DELAY);
+    });
+  }
+
+  const sectionContent = { sap1: '<p>Yankee late section text.</p>', sap2: '<p>Xray late section text.</p>' };
+  const sections = document.querySelectorAll('#slow-acc button');
+  for (const b of sections) {
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      for (const o of sections) {
+        const on = o === b && open;
+        const panel = document.getElementById(o.getAttribute('aria-controls'));
+        o.setAttribute('aria-expanded', String(on));
+        panel.hidden = !on;
+        panel.innerHTML = '';
+      }
+      if (!open) return;
+      setTimeout(() => {
+        if (b.getAttribute('aria-expanded') !== 'true') return;
+        document.getElementById(b.getAttribute('aria-controls')).innerHTML = sectionContent[b.getAttribute('aria-controls')];
+      }, LOAD_DELAY);
+    });
+  }
+
+  const insertedContent = { ia1: '<p>Uniform inserted section text.</p>', ia2: '<p>Tango inserted section text.</p>' };
+  const inserted = document.querySelectorAll('#insert-acc button');
+  for (const b of inserted) {
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      for (const o of inserted) {
+        o.setAttribute('aria-expanded', String(o === b && open));
+        if (o.nextElementSibling) o.nextElementSibling.remove();
+      }
+      if (!open) return;
+      b.insertAdjacentHTML('afterend', '<div aria-busy="true"><div class="spinner">Loading section…</div></div>');
+      setTimeout(() => {
+        if (b.getAttribute('aria-expanded') !== 'true') return;
+        const panel = b.nextElementSibling;
+        panel.removeAttribute('aria-busy');
+        panel.innerHTML = insertedContent[b.id];
+      }, LOAD_DELAY);
+    });
+  }
+</script>
+</body>
+</html>

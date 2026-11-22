@@ -211,7 +211,6 @@ your capture folder.
   every format.
 - The PDF links to saved videos with their full location on your Mac, so they stop working if you
   move the capture folder. The HTML and Markdown links keep working because they are relative.
-- A tab or section that takes a long time to load its content after a click may be saved empty.
 - Pop-up windows for signing in and links that open a new window are not supported yet.
 - Quitting during a save stops the download tools and cleans up first.
 
@@ -248,8 +247,14 @@ official `yt-dlp_macos` executable, GPLv3+ as a whole) and Deno (MIT) in
 one with its version, licence, what it contains and where its source is. The app carries that file
 and the licence texts in `Contents/Resources/ThirdPartyNotices/`.
 
+The app also carries a Python runtime with Microsoft [MarkItDown](https://github.com/microsoft/markitdown)
+(MIT) in `Contents/Resources/markitdown`, built by `scripts/fetch-tools.sh markitdown`. It is the
+basis for converting documents to Markdown in a later version; this version does not use it yet.
+
 PageCapture uses code of [FFmpeg](https://ffmpeg.org) licensed under the
-[LGPLv2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html). The corresponding source of
-the bundled tools (the FFmpeg source and its build recipe, and the yt-dlp source) is attached to
+[LGPLv2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html), and the MarkItDown runtime's
+lxml links GNU libiconv, also LGPL 2.1, statically. The corresponding source of
+the bundled tools (the FFmpeg source and its build recipe, the yt-dlp source, and the libiconv, libxml2,
+libxslt, zlib and lxml sources of the MarkItDown runtime) is attached to
 each [GitHub release](../../releases) as `PageCapture-third-party-sources-<version>.tar`, next to the
 DMG. `scripts/make-source-bundle.sh` builds it.

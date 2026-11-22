@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Late Panels</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  .spinner-border { display: inline-block; width: 2rem; height: 2rem; border: 4px solid teal; border-radius: 50%; }
+</style>
+</head>
+<body>
+<h1>Late panels</h1>
+
+<!-- Panels that already hold a loading indicator or a busy flag before they are shown, and whose
+     content arrives later. A response that arrives after its tab was deselected or its section
+     closed is dropped. The URL's fragment keeps only the section it names. -->
+
+<!-- Spinners rendered ahead of time in panels the page does not show yet: a Bootstrap tab pane
+     (heading and spinner) and the body of an exclusive accordion without aria-controls (intro and
+     spinner). The rest arrives SPINNER_DELAY ms after the click, replacing the spinner. -->
+<section data-case="hidden-spinner">
+  <h2>Pane tabs</h2>
+  <div role="tablist">
+    <button role="tab" aria-controls="hp0" aria-selected="true">Pane Ready</button>
+    <button role="tab" aria-controls="hp1" aria-selected="false" data-late="<p>Oscar late reviews text.</p>">Pane Reviews</button>
+  </div>
+  <div class="tab-content">
+    <div id="hp0" role="tabpanel" class="tab-pane active"><p>Pane ready text.</p></div>
+    <div id="hp1" role="tabpanel" class="tab-pane"><h3>Reviews</h3><div class="spinner-border"></div></div>
+  </div>
+
+  <h2>Pane sections</h2>
+  <div class="accordion">
+    <div class="item">
+      <button aria-expanded="false" data-late="<p>Papa late section text.</p>">Pane Section One</button>
+      <div class="body" hidden><p>Intro one.</p><div class="spinner-border"></div></div>
+    </div>
+    <div class="item">
+      <button aria-expanded="false">Pane Section Two</button>
+      <div class="body" hidden><p>Section two text.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- A panel busy (aria-busy) before its tab is selected, a flag the page never clears, and empty
+     until its content arrives BUSY_DELAY ms after the click. -->
+<section data-case="stale-busy">
+  <h2>Busy tabs</h2>
+  <div role="tablist">
+    <button role="tab" aria-controls="b0" aria-selected="true">Busy Ready</button>
+    <button role="tab" aria-controls="b1" aria-selected="false" data-late="<p>Quebec late busy text.</p>">Busy Late</button>
+  </div>
+  <div id="b0" role="tabpanel"><p>Busy ready text.</p></div>
+  <div id="b1" role="tabpanel" aria-busy="true" hidden></div>
+</section>
+
+<h2 id="next">Next section</h2>
+<p>After the late panels.</p>
+
+<script>
+  const SPINNER_DELAY = 1500;
+  const BUSY_DELAY = 700;
+  // When each tab was clicked (read by the tests).
+  const clickTimes = [];
+  const only = location.hash.slice(1);
+  for (const s of document.querySelectorAll('section[data-case]')) if (only && s.dataset.case !== only) s.remove();
+
+  // Runs `f` after `ms` on a message loop, not a timer: the test window holds timers back.
+  function after(ms, f) {
+    const at = performance.now() + ms;
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      if (performance.now() < at) return channel.port2.postMessage(0);
+      channel.port1.close();
+      f();
+    };
+    channel.port2.postMessage(0);
+  }
+
+  // Replaces the panel's spinner with the late content, or appends it to a panel without one.
+  function fill(panel, html) {
+    const spinner = panel.querySelector('.spinner-border');
+    if (spinner) spinner.outerHTML = html;
+    else panel.insertAdjacentHTML('beforeend', html);
+  }
+
+  for (const list of document.querySelectorAll('[role="tablist"]')) {
+    const tabs = list.querySelectorAll('[role="tab"]');
+    const delay = list.closest('[data-case]').dataset.case === 'stale-busy' ? BUSY_DELAY : SPINNER_DELAY;
+    for (const t of tabs) {
+      t.addEventListener('click', () => {
+        clickTimes.push(performance.now());
+        for (const o of tabs) {
+          const panel = document.getElementById(o.getAttribute('aria-controls'));
+          o.setAttribute('aria-selected', String(o === t));
+          if (panel.classList.contains('tab-pane')) panel.classList.toggle('active', o === t);
+          else panel.hidden = o !== t;
+        }
+        const late = t.dataset.late;
+        if (!late) return;
+        delete t.dataset.late;
+        const panel = document.getElementById(t.getAttribute('aria-controls'));
+        after(delay, () => { if (t.getAttribute('aria-selected') === 'true') fill(panel, late); });
+      });
+    }
+  }
+
+  const sections = document.querySelectorAll('.accordion button');
+  for (const b of sections) {
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      for (const o of sections) {
+        o.setAttribute('aria-expanded', String(o === b && open));
+        o.nextElementSibling.hidden = !(o === b && open);
+      }
+      const late = b.dataset.late;
+      if (!open || !late) return;
+      delete b.dataset.late;
+      after(SPINNER_DELAY, () => { if (b.getAttribute('aria-expanded') === 'true') fill(b.nextElementSibling, late); });
+    });
+  }
+</script>
+</body>
+</html>

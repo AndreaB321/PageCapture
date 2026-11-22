@@ -68,7 +68,12 @@ final class ManualWindowTests: XCTestCase {
         let window = try XCTUnwrap(manual.window)
         defer { window.close() }
         XCTAssertEqual(window.title, "PageCapture Manual")
-        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size, NSSize(width: 900, height: 800))
+        // 900×800, unless the screen is smaller (as on CI's virtual display): AppKit then shrinks
+        // the window to fit the screen's visible area.
+        let screen = try XCTUnwrap(window.screen)
+        let room = window.contentRect(forFrameRect: screen.visibleFrame).size
+        XCTAssertEqual(window.contentRect(forFrameRect: window.frame).size,
+                       NSSize(width: min(900, room.width), height: min(800, room.height)))
         XCTAssertTrue(window.styleMask.contains(.resizable))
 
         let deadline = Date().addingTimeInterval(10)

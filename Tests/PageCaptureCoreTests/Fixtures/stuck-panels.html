@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Stuck Panels</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+</style>
+</head>
+<body>
+<h1>Stuck panels</h1>
+
+<!-- Tab panels whose content never arrives: once its tab is selected, each shows a busy spinner for
+     good. In "#stuck" the spinner never changes; in "#churning" (four tabs) and "#churning-long"
+     (five tabs) its text changes all the time.
+     Tabs are made by the script below; the URL's fragment picks the case. -->
+<div role="tablist" id="list">
+  <button role="tab" aria-controls="s0" aria-selected="true">Stuck Ready</button>
+</div>
+<div id="panels"><div id="s0" role="tabpanel"><p>Stuck ready text.</p></div></div>
+
+<h2 id="next">Next section</h2>
+<p>After the stuck panels.</p>
+
+<script>
+  // When each tab was clicked (read by the tests).
+  const clickTimes = [];
+  const churning = location.hash.startsWith('#churning');
+  const count = location.hash === '#churning-long' ? 5 : churning ? 4 : 7;
+  const list = document.getElementById('list');
+  const panels = document.getElementById('panels');
+  for (let i = 1; i <= count; i++) {
+    list.insertAdjacentHTML('beforeend',
+      '<button role="tab" aria-controls="s' + i + '" aria-selected="false">Stuck Tab ' + i + '</button>');
+    panels.insertAdjacentHTML('beforeend', '<div id="s' + i + '" role="tabpanel" hidden></div>');
+  }
+  const tabs = list.querySelectorAll('[role="tab"]');
+  let timer = null;
+  for (const t of tabs) {
+    t.addEventListener('click', () => {
+      clickTimes.push(performance.now());
+      clearInterval(timer);
+      for (const o of tabs) {
+        const panel = document.getElementById(o.getAttribute('aria-controls'));
+        o.setAttribute('aria-selected', String(o === t));
+        panel.hidden = o !== t;
+        if (o !== tabs[0]) panel.innerHTML = '';
+      }
+      if (t === tabs[0]) return;
+      const panel = document.getElementById(t.getAttribute('aria-controls'));
+      const n = t.getAttribute('aria-controls').slice(1);
+      panel.innerHTML = '<div class="spinner" aria-busy="true">Loading stuck ' + n + '</div>';
+      if (!churning) return;
+      const spinner = panel.firstChild;
+      let dots = 0;
+      timer = setInterval(() => { dots = (dots + 1) % 3; spinner.textContent = 'Loading stuck ' + n + '.'.repeat(dots); }, 100);
+    });
+  }
+</script>
+</body>
+</html>

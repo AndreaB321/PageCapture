@@ -15,6 +15,12 @@ public struct CollectionTiming: Sendable {
     /// Upper bound on playing a video to reveal its source, or on waiting for a clicked player's
     /// video to appear, in milliseconds.
     public var videoRevealTimeout: Int = 3000
+    /// Upper bound on waiting for a tab or accordion panel's content to arrive after it is shown
+    /// (while it is empty, shows a loading indicator or keeps changing), in milliseconds.
+    public var panelLoadTimeout: Int = 5000
+    /// Upper bound on all such waits in one capture, beyond the short pause after each click, in
+    /// milliseconds.
+    public var panelWaitBudget: Int = 30000
 
     public init() {}
 }
@@ -104,6 +110,8 @@ public final class PageCaptureBridge {
             "imageTimeout": timing.imageTimeout,
             "stallLimit": timing.stallLimit,
             "revealTimeout": timing.videoRevealTimeout,
+            "panelTimeout": timing.panelLoadTimeout,
+            "panelWaitBudget": timing.panelWaitBudget,
         ]
         collectingFrame = frame
         isCollecting = true

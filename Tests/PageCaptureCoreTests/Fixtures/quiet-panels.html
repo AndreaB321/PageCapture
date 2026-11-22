@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fixture Quiet Panels</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  pc-card { display: block; }
+  .badge { width: 40px; height: 40px; background: teal; }
+  .bar { width: 200px; height: 8px; background: #ccc; }
+  .spinner { width: 20px; height: 20px; }
+</style>
+</head>
+<body>
+<h1>Quiet panels</h1>
+
+<!-- Tab panels whose content is all there once their tab is selected, though they hold what looks
+     like a loading indicator or keep changing. The URL's fragment keeps only the section it names. -->
+
+<!-- Filled panels: text; only a form field; only a web component (its text in a shadow root); only
+     an element styled by CSS; an empty panel in a wrapper the page does not show; a spinner faded
+     out, which comes with the panel's content on the click (so it is not one the panel showed
+     before the click); a busy flag set before the tab was selected and never cleared. -->
+<section data-case="filled">
+  <h2>Filled tabs</h2>
+  <div role="tablist">
+    <button role="tab" aria-controls="f0" aria-selected="true">Filled Ready</button>
+    <button role="tab" aria-controls="f1" aria-selected="false">Filled Text</button>
+    <button role="tab" aria-controls="f2" aria-selected="false">Filled Form</button>
+    <button role="tab" aria-controls="f3" aria-selected="false">Filled Component</button>
+    <button role="tab" aria-controls="f4" aria-selected="false">Filled Badge</button>
+    <button role="tab" aria-controls="f5" aria-selected="false">Filled Elsewhere</button>
+    <button role="tab" aria-controls="f6" aria-selected="false">Filled Faded</button>
+    <button role="tab" aria-controls="f7" aria-selected="false">Filled Stale</button>
+  </div>
+  <div id="f0" role="tabpanel"><p>Filled ready text.</p></div>
+  <div id="f1" role="tabpanel" hidden><p>Filled tab text.</p></div>
+  <div id="f2" role="tabpanel" hidden><input type="text" aria-label="Name"></div>
+  <div id="f3" role="tabpanel" hidden><pc-card></pc-card></div>
+  <div id="f4" role="tabpanel" hidden><div class="badge"></div></div>
+  <div style="display: none"><div id="f5" role="tabpanel" hidden></div></div>
+  <div id="f6" role="tabpanel" hidden data-fill='<p>Faded spinner text.</p><div class="spinner" style="opacity: 0">…</div>'></div>
+  <div id="f7" role="tabpanel" aria-busy="true" hidden><p>Stale busy text.</p></div>
+</section>
+
+<!-- Progress meters with a value: fixed amounts, not loads. Each comes with its panel's content when
+     the tab is selected (so it is not one the panel held before the click). -->
+<section data-case="progress">
+  <h2>Progress tabs</h2>
+  <div role="tablist">
+    <button role="tab" aria-controls="p0" aria-selected="true">Progress Ready</button>
+    <button role="tab" aria-controls="p1" aria-selected="false">Progress Meter</button>
+    <button role="tab" aria-controls="p2" aria-selected="false">Progress Bar</button>
+  </div>
+  <div id="p0" role="tabpanel"><p>Progress ready text.</p></div>
+  <div id="p1" role="tabpanel" hidden data-fill='<p>Course progress.</p><progress value="40" max="100">40%</progress>'></div>
+  <div id="p2" role="tabpanel" hidden
+    data-fill='<p>Rating.</p><div class="bar" role="progressbar" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100"></div>'></div>
+</section>
+
+<!-- Classes naming a finished state, a wrapper or a part that loads something, not a load. -->
+<section data-case="classes">
+  <h2>Class tabs</h2>
+  <div role="tablist">
+    <button role="tab" aria-controls="c0" aria-selected="true">Class Ready</button>
+    <button role="tab" aria-controls="c1" aria-selected="false">Class Finished</button>
+  </div>
+  <div id="c0" role="tabpanel"><p>Class ready text.</p></div>
+  <div id="c1" role="tabpanel" hidden>
+    <div class="loading-complete">Loaded list.</div>
+    <div class="skeleton-loaded">Loaded card.</div>
+    <div class="loader-wrapper">Wrapped text.</div>
+    <div class="image-loader">Gallery text.</div>
+  </div>
+</section>
+
+<!-- A stopwatch that changes every 10 ms (before the collector's first look at the panel) in a panel
+     that is filled at once. -->
+<section data-case="clock">
+  <h2>Clock tabs</h2>
+  <div role="tablist">
+    <button role="tab" aria-controls="k0" aria-selected="true">Clock Ready</button>
+    <button role="tab" aria-controls="k1" aria-selected="false" data-clock>Clock Live</button>
+  </div>
+  <div id="k0" role="tabpanel"><p>Clock ready text.</p></div>
+  <div id="k1" role="tabpanel" hidden><p>Live clock text.</p><span class="clock">00.00</span></div>
+</section>
+
+<h2 id="next">Next section</h2>
+<p>After the quiet panels.</p>
+
+<script>
+  // When each tab was clicked (read by the tests).
+  const clickTimes = [];
+  const only = location.hash.slice(1);
+  for (const s of document.querySelectorAll('section[data-case]')) if (only && s.dataset.case !== only) s.remove();
+
+  customElements.define('pc-card', class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: 'open' }).innerHTML = '<p>Shadow card text.</p>';
+    }
+  });
+
+  // Ticks every 10 ms on a message loop, not a timer (the test window holds timers back), while `tab` is selected.
+  function runClock(tab, clock) {
+    const start = performance.now();
+    let last = start;
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      if (tab.getAttribute('aria-selected') !== 'true') return channel.port1.close();
+      const now = performance.now();
+      if (now - last >= 10) {
+        last = now;
+        clock.textContent = (((now - start) / 1000) % 60).toFixed(2).padStart(5, '0');
+      }
+      channel.port2.postMessage(0);
+    };
+    channel.port2.postMessage(0);
+  }
+
+  for (const list of document.querySelectorAll('[role="tablist"]')) {
+    const tabs = list.querySelectorAll('[role="tab"]');
+    for (const t of tabs) {
+      t.addEventListener('click', () => {
+        clickTimes.push(performance.now());
+        for (const o of tabs) {
+          o.setAttribute('aria-selected', String(o === t));
+          document.getElementById(o.getAttribute('aria-controls')).hidden = o !== t;
+        }
+        const panel = document.getElementById(t.getAttribute('aria-controls'));
+        if (panel.dataset.fill) panel.innerHTML = panel.dataset.fill;
+        if (t.hasAttribute('data-clock')) runClock(t, panel.querySelector('.clock'));
+      });
+    }
+  }
+</script>
+</body>
+</html>

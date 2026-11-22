@@ -25,6 +25,7 @@ final class CaptureIntegrationTests: XCTestCase {
         timing.settleDelay = 150
         timing.stallDelay = 300
         timing.imageTimeout = 500
+        timing.panelLoadTimeout = 1500
         return timing
     }
 
@@ -307,6 +308,180 @@ final class CaptureIntegrationTests: XCTestCase {
             "Labelled Tab One", "Labelled panel one text.", "Labelled Tab Two", "Labelled panel two text.",
         ])
         XCTAssertFalse(text.contains("Elsewhere"), text)
+    }
+
+    // MARK: Panels that load late
+
+    /// `fast`, with time for a panel's content to arrive: timers in the test window run late.
+    private static var patient: CollectionTiming {
+        var timing = fast
+        timing.panelLoadTimeout = 5000
+        return timing
+    }
+
+    /// The capture of `Fixtures/slow-panels.html`, shared by its tests.
+    private static var slowPanelsCapture: CapturedContent?
+
+    private func captureSlowPanels() async throws -> CapturedContent {
+        if let content = Self.slowPanelsCapture { return content }
+        let (content, _) = try await timedCapture(page: "slow-panels.html", timing: Self.patient)
+        Self.slowPanelsCapture = content
+        return content
+    }
+
+    /// Captures the whole of `page`, returning what was collected and the time in ms between one tab
+    /// click and the next (the page logs its clicks in `clickTimes`): how long the collector waited
+    /// after each. Not the capture's duration: the test window holds timers back by up to a second.
+    private func timedCapture(page: String, timing: CollectionTiming) async throws -> (CapturedContent, [Double]) {
+        let harness = try await makeHarness(page: page)
+        defer { harness.window.close() }
+        let content = try await harness.bridge.collect(.wholePage, timing: timing)
+        let json = try await evaluate("typeof clickTimes === 'undefined' ? '[]' : JSON.stringify(clickTimes)",
+                                      in: harness, frame: nil)
+        let times = try JSONDecoder().decode([Double].self, from: Data((json ?? "[]").utf8))
+        return (content, zip(times, times.dropFirst()).map { $1 - $0 })
+    }
+
+    func testWaitsForTabPanelContentThatLoadsAfterTheTabIsSelected() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [
+            #"id="sp1""#, "Ready tab panel text.",
+            #"id="sp2""#, #"data-pc-tab-title="Fetched Tab""#, "Zulu late tab text.",
+            "Slow sections",
+        ])
+        XCTAssertFalse(content.html.contains("Loading tab"), "the panel is collected once loaded: \(content.html)")
+    }
+
+    func testWaitsForSectionContentThatLoadsAfterTheSectionIsOpened() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [
+            #"id="sap1""#, "Yankee late section text.",
+            "Fetched Section Two", #"id="sap2""#, "Xray late section text.",
+            "Next section",
+        ])
+    }
+
+    /// A loader known only by its class ("is-loading", no aria-busy) in a panel that already has a heading.
+    func testWaitsWhileAPanelShowsALoaderClass() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [#"id="sp3""#, "Reviews", "Whiskey late reviews text.", "Slow sections"])
+    }
+
+    /// No loading indicator and never empty: only its content growing, part by part, keeps the wait
+    /// going, past the collector's first look at the panel (which the test window may delay by a second).
+    func testWaitsWhileAPanelsContentKeepsGrowing() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [#"id="sp4""#, "Stream part 1.", "Stream part 13.", "Stream part 25.", "Slow sections"])
+    }
+
+    /// The page replaces a tab's panel, or inserts an accordion's panel, when it is clicked.
+    func testWaitsForAPanelThePageReplacesOrInsertsOnClick() async throws {
+        let content = try await captureSlowPanels()
+        assertInOrder(content.html, [#"id="sp5""#, "Victor replaced tab text.", "Slow sections"])
+        assertInOrder(content.html, ["Inserted Section One", "Uniform inserted section text.", "Inserted Section Two"])
+    }
+
+    /// Captures `quiet-panels.html#<section>`, failing if the collector waited for any of its panels
+    /// until the timeout: each of them is complete once shown.
+    private func assertNoPanelWait(_ section: String, shows texts: [String],
+                                   file: StaticString = #filePath, line: UInt = #line) async throws {
+        let timing = Self.patient
+        let (content, gaps) = try await timedCapture(page: "quiet-panels.html#\(section)", timing: timing)
+        XCTAssertFalse(gaps.isEmpty, "the tabs were clicked", file: file, line: line)
+        for gap in gaps {
+            XCTAssertLessThan(gap, Double(timing.panelLoadTimeout), "a panel was waited for: \(gaps)", file: file, line: line)
+        }
+        assertInOrder(content.html, texts + ["Next section"], file: file, line: line)
+    }
+
+    /// Filled panels (with text, a form field, a web component, a CSS-only element, in a wrapper the
+    /// page hides, with a faded-out spinner that comes on the click or a busy flag never cleared) add no wait.
+    func testPanelsFilledAtOnceAddNoWait() async throws {
+        try await assertNoPanelWait("filled", shows: [
+            "Filled tab text.", "Faded spinner text.", "Stale busy text.",
+        ])
+    }
+
+    /// Meters that come with the panel's content on the click, so not ignored as held before it.
+    func testProgressMetersWithAValueAddNoWait() async throws {
+        try await assertNoPanelWait("progress", shows: ["Course progress.", "Rating."])
+    }
+
+    func testClassesNamingAFinishedLoadAddNoWait() async throws {
+        try await assertNoPanelWait("classes", shows: ["Loaded list.", "Loaded card.", "Wrapped text.", "Gallery text."])
+    }
+
+    /// A stopwatch replacing its text every 10 ms: a change that adds nothing is not growth.
+    func testClockTickingInAFilledPanelAddsNoWait() async throws {
+        try await assertNoPanelWait("clock", shows: ["Live clock text."])
+    }
+
+    /// Panels that show a spinner for good: each is waited for up to the timeout and then collected
+    /// as it is, and after three such waits in a row in which nothing changed, the rest are not waited for.
+    /// The timeout is well above a gap with no wait (up to about 1.5 s in the test window).
+    func testPanelsThatNeverLoadEndAtTheTimeoutAndStopTheWaitingAfterThree() async throws {
+        var timing = Self.fast
+        timing.panelLoadTimeout = 4500
+        let (content, gaps) = try await timedCapture(page: "stuck-panels.html#stuck", timing: timing)
+        assertInOrder(content.html, ["Loading stuck 1", "Loading stuck 7", "Next section"])
+        XCTAssertEqual(gaps.count, 7, "seven tabs and the first again: \(gaps)")
+        for gap in gaps.prefix(3) {
+            XCTAssertGreaterThanOrEqual(gap, Double(timing.panelLoadTimeout), "waited until the timeout: \(gaps)")
+        }
+        for gap in gaps.dropFirst(3) {
+            XCTAssertLessThan(gap, Double(timing.panelLoadTimeout), "not waited for: \(gaps)")
+        }
+    }
+
+    /// Spinners that keep changing never trip the three-timeouts rule: the per-capture budget ends the waits.
+    /// The budget is well above a gap with no wait (up to about 1.5 s in the test window).
+    func testPanelWaitsEndWhenTheCapturesBudgetIsSpent() async throws {
+        var timing = Self.fast
+        timing.panelLoadTimeout = 9000
+        timing.panelWaitBudget = 4500
+        let (content, gaps) = try await timedCapture(page: "stuck-panels.html#churning", timing: timing)
+        assertInOrder(content.html, ["Loading stuck 1", "Loading stuck 4", "Next section"])
+        XCTAssertEqual(gaps.count, 4, "four tabs and the first again: \(gaps)")
+        XCTAssertGreaterThanOrEqual(gaps.first ?? 0, Double(timing.panelWaitBudget), "the budget was spent: \(gaps)")
+        for gap in gaps.dropFirst() {
+            XCTAssertLessThan(gap, Double(timing.panelWaitBudget), "not waited for: \(gaps)")
+        }
+    }
+
+    /// Waits that run out while the panel keeps changing are not fruitless: past the three-timeouts
+    /// limit, each churning panel is still waited for until the timeout.
+    func testPanelsThatKeepChangingAreWaitedForPastThreeTimeouts() async throws {
+        var timing = Self.fast
+        timing.panelLoadTimeout = 4000
+        timing.panelWaitBudget = 60000
+        let (content, gaps) = try await timedCapture(page: "stuck-panels.html#churning-long", timing: timing)
+        assertInOrder(content.html, ["Loading stuck 1", "Loading stuck 5", "Next section"])
+        XCTAssertEqual(gaps.count, 5, "five tabs and the first again: \(gaps)")
+        for gap in gaps {
+            XCTAssertGreaterThanOrEqual(gap, Double(timing.panelLoadTimeout), "waited until the timeout: \(gaps)")
+        }
+    }
+
+    /// A Bootstrap tab pane and an accordion body that hold a spinner while still hidden, and get the
+    /// rest of their content after they are shown: the spinner was not shown before the click, so it
+    /// is not ignored as stale.
+    func testWaitsForPanelsWhoseSpinnerWasRenderedWhileHidden() async throws {
+        let (content, _) = try await timedCapture(page: "late-panels.html#hidden-spinner", timing: Self.patient)
+        assertInOrder(content.html, [#"id="hp1""#, "Reviews", "Oscar late reviews text.", "Pane sections"])
+        assertInOrder(content.html, ["Pane Section One", "Intro one.", "Papa late section text.", "Pane Section Two"])
+    }
+
+    /// A busy flag set before the click and never cleared stops counting once the panel's late
+    /// content has arrived and the panel is quiet again, well before the timeout.
+    func testStaleBusyFlagStopsCountingOnceTheLateContentHasArrived() async throws {
+        var timing = Self.fast
+        timing.panelLoadTimeout = 8000
+        let (content, gaps) = try await timedCapture(page: "late-panels.html#stale-busy", timing: timing)
+        assertInOrder(content.html, [#"id="b1""#, "Quebec late busy text.", "Next section"])
+        XCTAssertEqual(gaps.count, 1, "the tab and the first again: \(gaps)")
+        for gap in gaps {
+            XCTAssertLessThan(gap, Double(timing.panelLoadTimeout) / 2, "not waited for until the timeout: \(gaps)")
+        }
     }
 
     // MARK: Hidden content

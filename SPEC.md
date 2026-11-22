@@ -38,8 +38,10 @@ A single shortcut, **⌘⇧S**, works while the app is frontmost:
    dropped. Collapsed content in the target (accordions, `<details>`) is expanded first and after
    each scroll step, so every panel appears after its header in both PDF and Markdown. Each tab of
    a tab widget is shown in turn, then the tab selected before is selected again; both exports show
-   every tab panel under its tab's title, without the tab bar. Links that navigate, menus/popups and
-   form submits are never clicked.
+   every tab panel under its tab's title, without the tab bar. A panel whose content loads after it is
+   shown (it is empty, shows a loading indicator or its content is still growing) is waited for, up
+   to a time limit per panel and in all per capture, before it is collected. Links that navigate,
+   menus/popups and form submits are never clicked.
 3. Capture ends when the bottom is reached and no more content loads, or when the user presses
    ⌘⇧S again (keeps what was collected). The banner disappears and the save dialog opens.
 
@@ -89,6 +91,11 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   LGPL, remux only; yt-dlp; Deno). yt-dlp runs from a working copy in
   `~/Library/Application Support/PageCapture/` so the menu item **Update Download Tools** can run
   its own updater without touching the signed app.
+- The app also bundles a pinned Python with Microsoft MarkItDown (documents, no audio/video; the runtime makes no
+  network calls on its own, and the app only ever passes it local files, though MarkItDown can fetch a
+  URL if given one) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
+  a symlink to it. It is the runtime for converting documents to Markdown, coming in a later version;
+  nothing in the app uses it yet.
 
 ## Install
 
