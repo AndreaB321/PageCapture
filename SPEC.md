@@ -38,8 +38,10 @@ A single shortcut, **⌘⇧S**, works while the app is frontmost:
    dropped. Collapsed content in the target (accordions, `<details>`) is expanded first and after
    each scroll step, so every panel appears after its header in both PDF and Markdown. Each tab of
    a tab widget is shown in turn, then the tab selected before is selected again; both exports show
-   every tab panel under its tab's title, without the tab bar. Links that navigate, menus/popups and
-   form submits are never clicked.
+   every tab panel under its tab's title, without the tab bar. A panel whose content loads after it is
+   shown (it is empty, shows a loading indicator or its content is still growing) is waited for, up
+   to a time limit per panel and in all per capture, before it is collected. Links that navigate,
+   menus/popups and form submits are never clicked.
 3. Capture ends when the bottom is reached and no more content loads, or when the user presses
    ⌘⇧S again (keeps what was collected). The banner disappears and the save dialog opens.
 
