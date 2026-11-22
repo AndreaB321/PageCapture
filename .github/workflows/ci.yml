@@ -30,14 +30,5 @@ jobs:
         run: swift build --build-tests
       # ToolsTests and VideoDownloaderTests skip themselves without ffmpeg etc. in build/tools
       # (scripts/fetch-tools.sh builds ffmpeg from source; CI only has build/tools/markitdown).
-      - name: OCR sandbox diagnostics (temporary)
-        run: scripts/ci-ocr-diag.sh
-      - name: Test XCTest (temporary filter)
-        timeout-minutes: 8
-        env:
-          NSUnbufferedIO: "YES"
-        run: swift test --disable-swift-testing --filter 'OCRHelperTests|DocumentConverterTests'
-      - name: Test Swift Testing (temporary filter)
-        if: always()
-        timeout-minutes: 5
-        run: swift test --disable-xctest --filter PDFTextRecognizerTests
+      - name: Test
+        run: swift test

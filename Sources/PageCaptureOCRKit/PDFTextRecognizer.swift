@@ -12,7 +12,8 @@ public enum PDFTextRecognizerError: Error, Equatable {
 
 /// Reads the text of an image-only (scanned) PDF with Apple's on-device Vision OCR and returns Markdown.
 /// Recognition uses `.fast`, because the sandboxed helper has no Neural Engine. It still needs the GPU:
-/// the helper's sandbox allows the GPU's user client (`AGXDeviceUserClient`), without which Vision finds
+/// the helper's sandbox allows the GPU's user client (`AGXDeviceUserClient`, or on a virtual Mac
+/// `AppleParavirtDeviceUserClient` and Metal's shader compiler), without which Vision finds
 /// no text at all, even in `.fast` mode. `.fast` is less precise than `.accurate` on hard scans and
 /// supports fewer languages (the European ones are fine).
 public enum PDFTextRecognizer {
