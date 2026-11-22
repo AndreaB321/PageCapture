@@ -24,13 +24,13 @@ final class BrowserRequestTests: XCTestCase {
                        ["lax", "none", "strict", "unset"])
     }
 
-    /// A cookie without a SameSite policy counts as Lax. (WebKit's cookie store reports cookies set
-    /// without the attribute as `none`, so those are sent, as WebKit itself does.)
-    func testCrossSiteRequestsGetOnlySameSiteNoneCookies() {
-        XCTAssertEqual(names(page: "https://www.other.test/page.html", url: "https://cdn.site.test/x.png"), ["none"])
+    /// Cross-site, only an explicit Lax or Strict cookie is held back, as in WebKit (no Lax by
+    /// default; older systems report `SameSite=None` as no policy).
+    func testCrossSiteRequestsGetNoLaxOrStrictCookies() {
+        XCTAssertEqual(names(page: "https://www.other.test/page.html", url: "https://cdn.site.test/x.png"), ["none", "unset"])
         let request = BrowserRequest(page: URL(string: "https://www.other.test/page.html"), cookies: jar)
             .request(URL(string: "https://cdn.site.test/x.png")!)
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "none=1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "none=1; unset=1")
     }
 
     func testWithoutAPageTheFirstURLDecidesTheSite() {
@@ -38,7 +38,7 @@ final class BrowserRequestTests: XCTestCase {
         let first = URL(string: "https://www.site.test/doc.pdf")!
         XCTAssertEqual(browser.cookies(for: URL(string: "https://cdn.site.test/doc.pdf")!, first: first).count, 4)
         XCTAssertEqual(browser.cookies(for: URL(string: "https://cdn.site.test/doc.pdf")!,
-                                       first: URL(string: "https://other.test/")!).map(\.name), ["none"])
+                                       first: URL(string: "https://other.test/")!).map(\.name).sorted(), ["none", "unset"])
         XCTAssertNil(browser.request(first).value(forHTTPHeaderField: "Referer"))
     }
 

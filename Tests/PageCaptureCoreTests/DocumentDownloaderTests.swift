@@ -126,12 +126,12 @@ final class DocumentDownloaderTests: XCTestCase {
         try assertNothingLeft()
     }
 
-    /// Cross-site with the page: only SameSite=None cookies, and the page's origin as referer.
+    /// Cross-site with the page: no Lax or Strict cookies, and the page's origin as referer.
     func testACrossSiteDocumentGetsOnlySameSiteNoneCookies() async throws {
         let cookies = [cookie("unset", domain: "other.test"), cookie("lax", domain: "other.test", sameSite: "lax"),
                        cookie("none", domain: "other.test", sameSite: "none")]
         _ = try await download(DocumentSource(url: URL(string: "https://other.test/text.pdf")!, kind: .pdf), cookies: cookies)
-        XCTAssertEqual(FixtureURLProtocol.requests.last?.cookie, "none=1")
+        XCTAssertEqual(FixtureURLProtocol.requests.last?.cookie, "none=1; unset=1")
         XCTAssertEqual(FixtureURLProtocol.requests.last?.referer, "https://documents.test/")
     }
 

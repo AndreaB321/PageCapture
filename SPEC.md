@@ -89,9 +89,9 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
 - Images, stylesheets (and their fonts and images), videos and documents are downloaded with the
   cookies and Referer a browser sends for a subresource of the page, recomputed at every redirect:
   - cookies: those of the browser that match the URL (domain, path, Secure, expiry); all of them
-    when the URL is same-site with the page, only `SameSite=None` ones when it is cross-site (no
-    SameSite counts as Lax; WebKit reports a cookie set without SameSite as `None`, so those are
-    sent cross-site, as WebKit itself does). Same-site compares the hosts' last two labels (the whole host for an IP
+    when the URL is same-site with the page, all but `SameSite=Lax` and `SameSite=Strict` ones when
+    it is cross-site (a cookie without SameSite is sent, as WebKit itself does; older macOS versions
+    report `SameSite=None` as no SameSite). Same-site compares the hosts' last two labels (the whole host for an IP
     address), as there is no Public Suffix List: `a.example.co.uk` and `b.other.co.uk` count as
     same-site.
   - Referer: the page's full URL (without fragment) same-origin, its origin cross-origin, none from

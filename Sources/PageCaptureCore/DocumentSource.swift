@@ -47,6 +47,13 @@ public enum DocumentKind: String, CaseIterable, Sendable {
         "application/vnd.oasis.opendocument.presentation": "odp",
     ]
 
+    /// Types servers send for "some file" (`application/octet-stream` for a PDF on a file host):
+    /// they say nothing about what the URL holds, so they count as no type.
+    static let genericMIMETypes: Set<String> = [
+        "application/octet-stream", "binary/octet-stream", "application/binary", "application/unknown",
+        "application/download", "application/x-download", "application/force-download",
+    ]
+
     static func essence(of mimeType: String) -> String {
         mimeType.split(separator: ";", maxSplits: 1).first.map(String.init)?
             .trimmingCharacters(in: .whitespaces).lowercased() ?? ""

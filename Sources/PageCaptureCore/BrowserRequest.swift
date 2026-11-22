@@ -5,8 +5,8 @@ import os
 /// Referer a browser would send for them (SPEC "Saving"), recomputed on every redirect:
 ///
 /// - Cookies: those of the cookie jar that match the URL (domain, path, Secure, expiry), all of them
-///   when the URL is same-site with the page, only `SameSite=None` ones when it is cross-site (no
-///   policy counts as Lax). None once a redirect has gone from https to http.
+///   when the URL is same-site with the page, all but explicit `SameSite=Lax`/`Strict` ones when it
+///   is cross-site (as WebKit). None once a redirect has gone from https to http.
 /// - Referer: the page's full URL (without fragment) same-origin, its origin cross-origin, none from
 ///   an https page to an http URL or once a redirect has gone from https to http. The page's own
 ///   Referrer-Policy is not known here, so this is the default policy (`strict-origin-when-cross-origin`).
@@ -66,7 +66,9 @@ struct BrowserRequest: Sendable {
         let matching = jar.cookies(for: url) ?? []
         guard let host = url.host, let pageHost = (page ?? first).host,
               Self.site(of: host) == Self.site(of: pageHost) else {
-            return matching.filter { $0.sameSitePolicy?.rawValue.lowercased() == "none" }
+            // Only an explicit Lax or Strict holds a cookie back, as in WebKit (no Lax by default).
+            // Older systems report `SameSite=None` as no policy, so the two can't be told apart.
+            return matching.filter { !["lax", "strict"].contains($0.sameSitePolicy?.rawValue.lowercased() ?? "") }
         }
         return matching
     }

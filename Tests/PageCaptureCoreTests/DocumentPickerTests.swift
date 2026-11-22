@@ -238,6 +238,23 @@ final class DocumentPickerTests: XCTestCase {
         withExtendedLifetime(delegate) {}
     }
 
+    /// A PDF a file host serves as `application/octet-stream` is a document by its URL.
+    func testPDFServedAsOctetStreamIsADocument() async throws {
+        let server = try await FixtureHTTPServer.start()
+        defer { server.stop() }
+        server.route("/files/ebook.pdf", Data("%PDF-1.4\n%%EOF\n".utf8), contentType: "application/octet-stream")
+        let page = PageCaptureBridge()
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        page.webView = view
+        let delegate = ResponseNoter(bridge: page)
+        view.navigationDelegate = delegate
+        let url = try XCTUnwrap(URL(string: server.url("/files/ebook.pdf")))
+        view.load(URLRequest(url: url))
+        try await waitUntil("page loaded") { !view.isLoading && view.url == url }
+        XCTAssertEqual(page.pickWholePage(), .picked(.document(DocumentSource(url: url, kind: .pdf))))
+        withExtendedLifetime(delegate) {}
+    }
+
     /// The same URL served as a PDF is still a document.
     func testPageServedAsPDFIsADocument() async throws {
         let server = try await FixtureHTTPServer.start()

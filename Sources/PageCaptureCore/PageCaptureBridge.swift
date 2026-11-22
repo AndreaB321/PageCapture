@@ -195,6 +195,7 @@ public final class PageCaptureBridge {
         picked = .wholePage
         guard let url = webView?.url else { return .picked(.wholePage) }
         let mimeType = mainFrameResponse.flatMap { Self.samePage($0.url, url) ? $0.mimeType : nil }
+            .flatMap { DocumentKind.genericMIMETypes.contains(DocumentKind.essence(of: $0)) ? nil : $0 }
         // A known type that is not a document type makes it a page, whatever its URL looks like
         // (`…/blob/main/paper.pdf` served as HTML).
         if let mimeType, !mimeType.isEmpty, DocumentKind(mimeType: mimeType) == nil,
