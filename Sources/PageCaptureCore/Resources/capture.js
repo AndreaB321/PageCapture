@@ -345,6 +345,7 @@
   }
 
   // Only the user's own events pick: a page can dispatch (or `click()`) events on what it sees.
+  // Hovering only moves the highlight (the click picks its own target), so it takes any event.
   function swallow(e) {
     if (!picker.active || !e.isTrusted) return;
     e.preventDefault();
@@ -352,11 +353,11 @@
   }
 
   window.addEventListener('mousemove', (e) => {
-    if (picker.active && e.isTrusted) highlight(shieldedAt(e.target) || targetAt(e.target));
+    if (picker.active) highlight(shieldedAt(e.target) || targetAt(e.target));
   }, true);
   window.addEventListener('mouseout', (e) => {
     const to = e.relatedTarget;
-    if (picker.active && e.isTrusted && (!to || to.localName === 'iframe' || to.localName === 'frame')) highlight(null);
+    if (picker.active && (!to || to.localName === 'iframe' || to.localName === 'frame')) highlight(null);
   }, true);
   window.addEventListener('scroll', () => {
     picker.shields.forEach(placeShield);

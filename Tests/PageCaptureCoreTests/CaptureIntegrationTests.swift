@@ -560,12 +560,12 @@ final class CaptureIntegrationTests: XCTestCase {
         XCTAssertEqual(lazySrc, "false", "the image has no source before it is scrolled into view")
 
         let highlight = try await highlighted(in: harness, hovering: "#s3 p")
-        // Hovering scrolled the page to the paragraph, as the mouse could only be over it in view.
-        let scrolledTo = try await evaluate("String(window.scrollY)", in: harness, frame: nil)
         let article = try await rect(of: "#article", in: harness)
         XCTAssertEqual(highlight, article, "the article is highlighted")
 
         try await pick(in: harness, frame: nil, selector: "#s3 p")
+        // Clicking scrolled the page to the paragraph, as the mouse can only be over it in view.
+        let scrolledTo = try await evaluate("String(window.scrollY)", in: harness, frame: nil)
         XCTAssertEqual(harness.picks.targets, [.picked])
 
         let content = try await harness.bridge.collect(.picked, timing: Self.fast)
@@ -745,7 +745,10 @@ final class CaptureIntegrationTests: XCTestCase {
         harness.bridge.setPicking(true)
         defer { harness.bridge.setPicking(false) }
         try await Task.sleep(for: .milliseconds(100))
-        try await mouse(in: harness, frame: nil, selector: selector, events: [.mouseMoved])
+        // Hovering takes the page's own events too (only clicks must be the user's).
+        _ = try await evaluate("""
+            document.querySelector('\(selector)').dispatchEvent(new MouseEvent('mousemove', { bubbles: true })); 'ok'
+            """, in: harness, frame: nil)
         return try await evaluate("""
             (() => {
               const o = document.querySelector('[data-pagecapture-ui]');
@@ -807,6 +810,10 @@ final class CaptureIntegrationTests: XCTestCase {
               const r = el.getBoundingClientRect();
               const x0 = Math.max(r.left, 0), x1 = Math.min(r.right, innerWidth);
               const y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, innerHeight);
+              // A point where `el` itself is hit (not a child covering it), else the centre.
+              for (let fy = 0.5; fy < 1; fy += 0.01) for (const y of [y0 + (y1 - y0) * fy, y0 + (y1 - y0) * (1 - fy)])
+                for (let fx = 0.5; fx < 1; fx += 0.01) for (const x of [x0 + (x1 - x0) * fx, x0 + (x1 - x0) * (1 - fx)])
+                  if (document.elementFromPoint(x, y) === el) return x + ',' + y;
               return ((x0 + x1) / 2) + ',' + ((y0 + y1) / 2);
             })()
             """, in: harness, frame: frame)
