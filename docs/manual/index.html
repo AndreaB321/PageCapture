@@ -64,6 +64,7 @@
     <li><a href="#formats">The three formats</a></li>
     <li><a href="#markdown">Reading Markdown on a Mac</a></li>
     <li><a href="#media">Images and videos</a></li>
+    <li><a href="#documents">Documents</a></li>
     <li><a href="#signin">Signed-in sites</a></li>
     <li><a href="#shortcuts">Keyboard shortcuts</a></li>
     <li><a href="#tips">Tips and limits</a></li>
@@ -101,7 +102,8 @@
   <li>a <strong>frame</strong> (a page embedded in the page, such as a course viewer),</li>
   <li>a <strong>scrolling area</strong> (a panel that scrolls on its own),</li>
   <li>the page's <strong>main article</strong>, on sites that mark it, such as Wikipedia and most documentation sites,</li>
-  <li>the <strong>whole page</strong>: click outside any outlined area, or press <kbd>Return</kbd>.</li>
+  <li>an <strong>embedded document</strong>: a PDF, Word, Excel or PowerPoint file shown in the page (see <a href="#documents">Documents</a>),</li>
+  <li>the <strong>whole page</strong>: click outside any outlined area, or press <kbd>Return</kbd>. When the page is itself a PDF, this saves the PDF as a document.</li>
 </ul>
 <p>Press <kbd>Esc</kbd>, or <kbd>⌘⇧S</kbd> again, to cancel.</p>
 <figure>
@@ -180,28 +182,39 @@
 <p>Copy-protected videos (DRM) are never downloaded: they are linked to the original. Only save videos you are allowed to keep.</p>
 <div class="note">YouTube changes often. If YouTube videos stop downloading, choose <strong>PageCapture → Update Download Tools</strong>.</div>
 
-<h2 id="signin">8. Signed-in sites</h2>
+<h2 id="documents">8. Documents</h2>
+<p>When a page shows a PDF, Word (<code>.docx</code>), Excel (<code>.xlsx</code>, <code>.xls</code>), PowerPoint (<code>.pptx</code>) or Outlook (<code>.msg</code>) file, in a frame or embedded in the page, or through the Office Online or Google viewer, you can pick that document. When the page itself is a PDF, press <kbd>Return</kbd>.</p>
+<p>PageCapture does not scroll a document. It downloads the original file with your sign-in (the banner says “Downloading document…”; <kbd>⌘⇧S</kbd> cancels), then the save panel offers two formats:</p>
+<ul>
+  <li><strong>Original</strong>: the file itself, unchanged, e.g. <code>Name/Name.pdf</code>,</li>
+  <li><strong>Markdown</strong>: its text, tables and headings as <code>Name/Name.md</code>, made on your Mac without sending the file anywhere.</li>
+</ul>
+<p>A scanned PDF, which has no text, is read with the Mac's own text recognition. When a document has no readable text, or its Markdown cannot be made, the original is kept even if you only ticked Markdown, and the message says why. The two formats you tick are remembered separately from the page formats.</p>
+<p>When the original cannot be downloaded (the viewer does not give its address, the site sends a sign-in page or an error, the file is larger than 500 MB, or it is an old <code>.doc</code> or <code>.ppt</code> file), PageCapture captures the frame as a page instead, and the message says why.</p>
+
+<h2 id="signin">9. Signed-in sites</h2>
 <p>To capture a page that needs an account, sign in inside PageCapture's own window, just as in any browser. PageCapture keeps that sign-in for next time. It does not use the sign-ins of Safari or Chrome.</p>
+<p>Images, stylesheets, videos and documents are downloaded with the cookies the browser itself would send for them from that page, so a file on another site gets only the cookies that site allows across sites. A saved original document is marked as downloaded from the web, so macOS and apps such as Office treat it with the same care as a browser download.</p>
 <p>When saving videos from YouTube or Vimeo, only that site's own cookies are passed to the download tool, in a private temporary file that is deleted straight away. Nothing temporary is written into your capture folder.</p>
 
-<h2 id="shortcuts">9. Keyboard shortcuts</h2>
+<h2 id="shortcuts">10. Keyboard shortcuts</h2>
 <table>
   <tr><th>Shortcut</th><th>What it does</th></tr>
-  <tr><td><kbd>⌘⇧S</kbd></td><td>Start picking · cancel picking · stop capturing and keep what was collected</td></tr>
+  <tr><td><kbd>⌘⇧S</kbd></td><td>Start picking · cancel picking · stop capturing and keep what was collected · cancel a document download</td></tr>
   <tr><td><kbd>Return</kbd></td><td>While picking: capture the whole page</td></tr>
   <tr><td><kbd>Esc</kbd></td><td>While picking: cancel</td></tr>
   <tr><td><kbd>⌘[</kbd> / <kbd>⌘]</kbd></td><td>Back / forward</td></tr>
   <tr><td><kbd>⌘?</kbd></td><td>Open this manual</td></tr>
 </table>
 
-<h2 id="tips">10. Tips and limits</h2>
+<h2 id="tips">11. Tips and limits</h2>
 <ul>
   <li>Keep the PageCapture window visible while it captures: macOS slows down hidden windows.</li>
   <li>Pick the article, not the whole page, when you only want the content: the result is cleaner in every format.</li>
   <li>The PDF links to saved videos with their full location on your Mac, so they stop working if you move the capture folder. The HTML and Markdown links keep working because they are relative.</li>
   <li>Very wide tables or code blocks are cut at the right margin of the PDF.</li>
   <li>Pop-up windows for signing in and links that open a new window are not supported yet.</li>
-  <li>Quitting during a save stops the download tools and cleans up first.</li>
+  <li>Quitting during a save or a document download stops it and cleans up first.</li>
 </ul>
 
 <footer>PageCapture · Designed and built by Andrea B 🇮🇹 🍕 🤌🏻</footer>

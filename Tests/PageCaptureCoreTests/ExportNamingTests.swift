@@ -17,6 +17,23 @@ final class ExportNamingTests: XCTestCase {
         XCTAssertEqual(ExportNaming.sanitizedName(fromTitle: String(repeating: "x", count: 300)).count, 100)
     }
 
+    func testSanitizedNameIsCappedInBytesWithoutSplittingACharacter() {
+        let name = ExportNaming.sanitizedName(fromTitle: String(repeating: "漢", count: 100))
+        XCTAssertLessThanOrEqual(name.utf8.count, 200)
+        XCTAssertEqual(name, String(repeating: "漢", count: 66))
+        let emoji = ExportNaming.sanitizedName(fromTitle: String(repeating: "漢", count: 65) + "😀😀")
+        XCTAssertEqual(emoji, String(repeating: "漢", count: 65) + "😀", "the second emoji (4 bytes) is dropped whole")
+    }
+
+    func testDocumentNameFallsBackToTheTitleThenDocument() {
+        let page = URL(string: "https://example.com/files/Annual%20Report.pdf?sig=1")!
+        XCTAssertEqual(ExportNaming.documentName(url: page, pageTitle: "Title"), "Annual Report")
+        let root = URL(string: "https://example.com/")!
+        XCTAssertEqual(ExportNaming.documentName(url: root, pageTitle: "My: Paper"), "My- Paper")
+        XCTAssertEqual(ExportNaming.documentName(url: root, pageTitle: nil), "Document")
+        XCTAssertEqual(ExportNaming.documentName(url: root, pageTitle: "  "), "Document")
+    }
+
     func testImageFileNameKeepsURLBasenameAndExtension() {
         let url = URL(string: "https://cdn.example.com/a/b/Photo%20One.JPG?w=200")!
         XCTAssertEqual(ExportNaming.imageFileName(index: 0, url: url, mimeType: "image/png"), "001-Photo-One.jpg")

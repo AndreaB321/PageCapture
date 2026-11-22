@@ -42,7 +42,9 @@ final class CaptureIntegrationTests: XCTestCase {
         let window = NSWindow(contentRect: webView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = webView
+        window.acceptsMouseMovedEvents = true
         window.orderFrontRegardless()
+        window.makeKey()
         let picks = PickLog()
         bridge.onPick = { picks.targets.append($0) }
 
@@ -566,6 +568,8 @@ final class CaptureIntegrationTests: XCTestCase {
         XCTAssertEqual(highlight, article, "the article is highlighted")
 
         try await pick(in: harness, frame: nil, selector: "#s3 p")
+        // Clicking scrolled the page to the paragraph, as the mouse can only be over it in view.
+        let scrolledTo = try await evaluate("String(window.scrollY)", in: harness, frame: nil)
         XCTAssertEqual(harness.picks.targets, [.picked])
 
         let content = try await harness.bridge.collect(.picked, timing: Self.fast)
@@ -581,7 +585,7 @@ final class CaptureIntegrationTests: XCTestCase {
             XCTAssertFalse(content.html.contains(outside), "\(outside) is outside the article: \(content.html)")
         }
         let scrollY = try await evaluate("String(window.scrollY)", in: harness, frame: nil)
-        XCTAssertEqual(scrollY, "150", "the page's scroll position is restored")
+        XCTAssertEqual(scrollY, scrolledTo, "the page's scroll position is restored")
     }
 
     /// A scrolling area inside the article is the innermost target and is picked on its own; a click
@@ -745,6 +749,7 @@ final class CaptureIntegrationTests: XCTestCase {
         harness.bridge.setPicking(true)
         defer { harness.bridge.setPicking(false) }
         try await Task.sleep(for: .milliseconds(100))
+        // Hovering takes the page's own events too (only clicks must be the user's).
         _ = try await evaluate("""
             document.querySelector('\(selector)').dispatchEvent(new MouseEvent('mousemove', { bubbles: true })); 'ok'
             """, in: harness, frame: nil)
@@ -792,16 +797,54 @@ final class CaptureIntegrationTests: XCTestCase {
         let before = harness.picks.targets.count
         // Give the setPicking evaluations a moment to land in every frame.
         try await Task.sleep(for: .milliseconds(100))
-        _ = try await evaluate("""
-            (() => {
-              const el = document.querySelector('\(selector)');
-              el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              return 'ok';
-            })()
-            """, in: harness, frame: frame)
+        try await mouse(in: harness, frame: frame, selector: selector, events: [.mouseMoved, .leftMouseDown, .leftMouseUp])
         try await waitUntil("pick message") { harness.picks.targets.count > before }
         harness.bridge.setPicking(false)
+    }
+
+    /// Real (trusted) mouse events at the visible part of `selector` in `frame` (nil = main frame):
+    /// the picker ignores events a page dispatches itself.
+    private func mouse(in harness: Harness, frame: WKFrameInfo?, selector: String,
+                       events: [NSEvent.EventType]) async throws {
+        let inFrame = try await evaluate("""
+            (() => {
+              const el = document.querySelector('\(selector)');
+              // The mouse can only be over what is in view.
+              if (el.getBoundingClientRect().top >= innerHeight) el.scrollIntoView({ block: 'center' });
+              const r = el.getBoundingClientRect();
+              const x0 = Math.max(r.left, 0), x1 = Math.min(r.right, innerWidth);
+              const y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, innerHeight);
+              // A point where `el` itself is hit (not a child covering it), else the centre.
+              for (let fy = 0.5; fy < 1; fy += 0.01) for (const y of [y0 + (y1 - y0) * fy, y0 + (y1 - y0) * (1 - fy)])
+                for (let fx = 0.5; fx < 1; fx += 0.01) for (const x of [x0 + (x1 - x0) * fx, x0 + (x1 - x0) * (1 - fx)])
+                  if (document.elementFromPoint(x, y) === el) return x + ',' + y;
+              return ((x0 + x1) / 2) + ',' + ((y0 + y1) / 2);
+            })()
+            """, in: harness, frame: frame)
+        var point = try XCTUnwrap(inFrame).split(separator: ",").compactMap { Double($0) }
+        if frame != nil {
+            let origin = try await evaluate("""
+                (() => {
+                  const f = document.getElementById('frame');
+                  const r = f.getBoundingClientRect();
+                  return (r.left + f.clientLeft) + ',' + (r.top + f.clientTop);
+                })()
+                """, in: harness, frame: nil)
+            let offset = try XCTUnwrap(origin).split(separator: ",").compactMap { Double($0) }
+            point = [point[0] + offset[0], point[1] + offset[1]]
+        }
+        // A move that only makes the web view track the mouse, then the events at the point itself.
+        let steps: [(NSEvent.EventType, Double)] = [(.mouseMoved, 1)] + events.map { ($0, 0) }
+        for (type, offset) in steps {
+            let location = NSPoint(x: point[0] + offset, y: harness.webView.bounds.height - point[1] - offset)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: harness.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            harness.window.sendEvent(event)
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        // The events reach the page by their own route, not the evaluations' queue.
+        try await Task.sleep(for: .milliseconds(150))
     }
 
     private func evaluate(_ script: String, in harness: Harness, frame: WKFrameInfo?) async throws -> String? {

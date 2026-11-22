@@ -11,6 +11,14 @@ public struct ExportResult: Equatable, Sendable {
     public var failedImages: [String]
     /// Video index → how it appears in the outputs.
     public var videos: [Int: VideoLink] = [:]
+    /// A document's original (`Name.<ext>`).
+    public var original: URL?
+    /// Why a document's `Name.md` was not written although Markdown was ticked.
+    public var documentMarkdownFailure: DocumentMarkdownFailure?
+    /// Set by the app when a picked document could not be downloaded and its frame was captured as a page.
+    public var documentFallback: DocumentDownloadError?
+    /// Whether the fallback captured the whole page (the page itself was the document) rather than a frame.
+    public var documentFallbackIsWholePage = false
     /// Why the Markdown could not be written (the other formats were), e.g. "The conversion took too long."
     public var markdownFailure: String?
 
@@ -37,6 +45,11 @@ public struct ExportResult: Equatable, Sendable {
         if let markdownFailure {
             let reason = markdownFailure.hasSuffix(".") ? String(markdownFailure.dropLast()) : markdownFailure
             notes.append("Markdown could not be written: \(reason)")
+        }
+        if let documentMarkdownFailure { notes.append(documentMarkdownFailure.note) }
+        if let documentFallback {
+            let instead = documentFallbackIsWholePage ? "the page was captured instead" : "the frame was captured as a page"
+            notes.append("the document could not be downloaded (\(documentFallback.reason)), so \(instead)")
         }
         var text = "Saved to \(folder.path)"
         if !notes.isEmpty { text += " (\(notes.joined(separator: "; ")))" }

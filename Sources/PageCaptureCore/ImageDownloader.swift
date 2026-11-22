@@ -18,7 +18,8 @@ public struct ImageDownloadResult: Equatable, Sendable {
     }
 }
 
-/// Downloads `<img>` sources with the browser's cookies and a Referer, so signed-in images work.
+/// Downloads `<img>` sources with the browser's cookies and a Referer, as the browser would send
+/// them (`BrowserRequest`), so signed-in images work.
 public enum ImageDownloader {
     private static let maxConcurrent = 6
 
@@ -35,10 +36,7 @@ public enum ImageDownloader {
         configuration: URLSessionConfiguration = .ephemeral
     ) async -> ImageDownloadResult {
         let config = configuration.copy() as! URLSessionConfiguration
-        // A private jar that does the domain/path/secure matching; the Cookie header is set explicitly
-        // per request so it does not depend on the session's own cookie handling.
-        let jar = URLSessionConfiguration.ephemeral.httpCookieStorage ?? HTTPCookieStorage()
-        for cookie in cookies { jar.setCookie(cookie) }
+        let browser = BrowserRequest(page: referer, cookies: cookies)
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
         let session = URLSession(configuration: config)
@@ -53,7 +51,7 @@ public enum ImageDownloader {
                 let index = next
                 next += 1
                 group.addTask {
-                    (index, await fetch(urls[index], index: index, into: folder, referer: referer, jar: jar, session: session))
+                    (index, await fetch(urls[index], index: index, into: folder, browser: browser, session: session))
                 }
             }
             for _ in 0..<maxConcurrent { addNext() }
@@ -70,7 +68,7 @@ public enum ImageDownloader {
 
     /// Returns the written file name, or `nil` on failure.
     private static func fetch(
-        _ urlString: String, index: Int, into folder: URL, referer: URL, jar: HTTPCookieStorage, session: URLSession
+        _ urlString: String, index: Int, into folder: URL, browser: BrowserRequest, session: URLSession
     ) async -> String? {
         guard let url = URL(string: urlString) else { return nil }
         let data: Data
@@ -79,14 +77,8 @@ public enum ImageDownloader {
             guard let decoded = DataURL.decode(urlString) else { return nil }
             (data, mimeType) = decoded
         } else {
-            var request = URLRequest(url: url)
-            request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
-            request.setValue("image/avif,image/webp,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
-            request.httpShouldHandleCookies = false
-            for (field, value) in HTTPCookie.requestHeaderFields(with: jar.cookies(for: url) ?? []) {
-                request.setValue(value, forHTTPHeaderField: field)
-            }
-            guard let (body, response) = try? await session.data(for: request) else { return nil }
+            let request = browser.request(url, accept: "image/avif,image/webp,image/*,*/*;q=0.8")
+            guard let (body, response) = try? await session.data(for: request, delegate: browser.redirects()) else { return nil }
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
             // A sign-in or error page instead of the image.
             if response.mimeType?.lowercased().hasPrefix("text/html") == true { return nil }

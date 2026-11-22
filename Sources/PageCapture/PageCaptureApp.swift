@@ -47,11 +47,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Quitting during an export cancels it: the tools are stopped and the temporary files removed
-    /// before the app goes, within about 5 s.
+    /// before the app goes, within about 5 s. So does quitting during a document download.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard controller.isExporting else { return .terminateNow }
+        guard controller.isExporting || controller.isDownloadingDocument else { return .terminateNow }
         Task {
+            // The export first: a document export removes its original as it stops.
             await controller.cancelExport(waitingAtMost: .seconds(3))
+            await controller.cancelDocumentDownload(waitingAtMost: .seconds(1))
             Tools.stopAllRunning()
             VideoDownloader.removeTemporaryFiles()
             sender.reply(toApplicationShouldTerminate: true)

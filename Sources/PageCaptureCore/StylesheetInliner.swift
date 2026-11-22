@@ -2,7 +2,7 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// Makes a capture's stylesheets self-contained for the HTML (SPEC "Saving"): linked sheets are
-/// downloaded with the browser's cookies and the page as referer, `@import`s are inlined (to
+/// downloaded with the browser's cookies and Referer for the page (`BrowserRequest`), `@import`s are inlined (to
 /// `maxDepth` levels) and what their `url()`s reference (fonts, background images) is embedded as
 /// `data:` URLs, up to `resourceLimit` bytes each and `totalLimit` in all; beyond that a `url()`
 /// keeps its absolute URL. A sheet that fails to download is left out.
@@ -11,8 +11,7 @@ actor StylesheetInliner {
     private static let maxConcurrent = 6
 
     private let session: URLSession
-    private let jar: HTTPCookieStorage
-    private let referer: URL
+    private let browser: BrowserRequest
     private let resourceLimit: Int
     private let totalLimit: Int
     /// Absolute URL → its `data:` URL, for the resources that were embedded.
@@ -51,10 +50,7 @@ actor StylesheetInliner {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
         session = URLSession(configuration: config)
-        // As in ImageDownloader: a private jar does the cookie matching, the header is set by hand.
-        jar = URLSessionConfiguration.ephemeral.httpCookieStorage ?? HTTPCookieStorage()
-        for cookie in cookies { jar.setCookie(cookie) }
-        referer = page
+        browser = BrowserRequest(page: page, cookies: cookies)
         self.resourceLimit = resourceLimit
         self.totalLimit = totalLimit
     }
@@ -85,9 +81,10 @@ actor StylesheetInliner {
                 guard next < new.count else { return }
                 let url = new[next]
                 next += 1
-                let request = self.request(url, accept: "*/*")
+                let request = self.browser.request(url, accept: "*/*")
                 let session = self.session
-                group.addTask { (url, await Self.fetch(request, session: session, limit: limit)) }
+                let delegate = self.browser.redirects()
+                group.addTask { (url, await Self.fetch(request, session: session, delegate: delegate, limit: limit)) }
             }
             for _ in 0..<Self.maxConcurrent { addNext() }
             for await (url, result) in group {
@@ -103,27 +100,17 @@ actor StylesheetInliner {
     }
 
     private func fetchText(_ url: URL) async -> String? {
-        guard let (data, _) = await Self.fetch(request(url, accept: "text/css,*/*;q=0.1"), session: session,
-                                               limit: resourceLimit) else { return nil }
+        guard let (data, _) = await Self.fetch(browser.request(url, accept: "text/css,*/*;q=0.1"), session: session,
+                                               delegate: browser.redirects(), limit: resourceLimit) else { return nil }
         var text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         return text
     }
 
-    private func request(_ url: URL, accept: String) -> URLRequest {
-        var request = URLRequest(url: url)
-        request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer")
-        request.setValue(accept, forHTTPHeaderField: "Accept")
-        request.httpShouldHandleCookies = false
-        for (field, value) in HTTPCookie.requestHeaderFields(with: jar.cookies(for: url) ?? []) {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
-        return request
-    }
-
     /// The body and MIME type, or nil on failure, a sign-in page, or more than `limit` bytes.
-    private static func fetch(_ request: URLRequest, session: URLSession, limit: Int) async -> (Data, String)? {
-        guard let (bytes, response) = try? await session.bytes(for: request) else { return nil }
+    private static func fetch(_ request: URLRequest, session: URLSession, delegate: URLSessionTaskDelegate,
+                              limit: Int) async -> (Data, String)? {
+        guard let (bytes, response) = try? await session.bytes(for: request, delegate: delegate) else { return nil }
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
         let mime = response.mimeType?.lowercased()
         if mime?.hasPrefix("text/html") == true || response.expectedContentLength > limit { return nil }

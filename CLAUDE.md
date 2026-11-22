@@ -34,8 +34,12 @@ Markdown tests of `CaptureExporterTests` and `CaptureIntegrationTests` are skipp
     MarkItDown, `Contents/Resources/markitdown`), on a private copy under `sandbox-exec` (`(deny
     default)`: reads only the runtime, its work directory and system libraries, writes only in its
     work directory, no network, no child processes); runs the `pagecapture-ocr` helper, under its
-    own profile, on PDFs without text. `MarkdownExporter` uses it (`markdown(forCapturedPageHTML:)`):
-    `markdown.js` turns the capture into semantic HTML, MarkItDown writes the Markdown. Fixtures: `scripts/make-document-fixtures.sh`.
+    own profile, on PDFs without text. Called by `DocumentExporter` and by `MarkdownExporter`
+    (`markdown(forCapturedPageHTML:)`: `markdown.js` turns the capture into semantic HTML, MarkItDown
+    writes the Markdown). Fixtures: `scripts/make-document-fixtures.sh`.
+  - `DocumentSource`: pure; a frame's or page's URL (+ MIME) → the original document to save, unwrapping Office/Google viewers.
+  - `DocumentDownloader`: streams the original with the browser's cookies, 500 MB cap, magic-byte check.
+  - `DocumentExporter`: writes `Name/Name.<ext>` and/or `Name/Name.md` (via `DocumentConverter`) for a document save.
 - `Sources/PageCaptureOCRKit`: `PDFTextRecognizer`, Vision OCR (`.fast`; the sandbox allows the GPU,
   not the Neural Engine) of image-only PDFs to Markdown, rendered with CoreGraphics, never PDFKit.
   Used by the `pagecapture-ocr` helper, which `DocumentConverter` runs under its own sandbox

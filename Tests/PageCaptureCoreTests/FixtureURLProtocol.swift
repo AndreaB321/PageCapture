@@ -4,7 +4,11 @@ import ImageIO
 /// Serves image downloads in tests for `pctest://` and `https://images.test/` URLs, and records the
 /// requests it saw. Paths: `*/missing.*` → 404, `*/login.*` → an HTML page, `*/noext` → JPEG MIME,
 /// `*.css` → `Fixtures/styles/<name>` (empty when there is none), `*.woff2` → a few font bytes,
-/// anything else → a 1×1 PNG.
+/// anything else → a 1×1 PNG. `http(s)://documents.test/<file>` and `http(s)://other.test/<file>`
+/// serve `Fixtures/documents/<file>` (after the `missing` and `login` rules) as
+/// `application/octet-stream`, or 404; `*/stall.pdf` sends the start of a PDF and never ends.
+/// `*/redirect?to=<url>` → 302 to `<url>`; like URLSession's own HTTP loader, the redirected
+/// request carries the headers set on the first one, unless the task's delegate replaces it.
 final class FixtureURLProtocol: URLProtocol {
     struct Seen: Sendable {
         var url: URL
@@ -39,6 +43,8 @@ final class FixtureURLProtocol: URLProtocol {
 
     static let font = Data("wOF2fixture".utf8)
 
+    static let documentHosts: Set<String> = ["documents.test", "other.test"]
+
     static func configuration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FixtureURLProtocol.self]
@@ -47,7 +53,7 @@ final class FixtureURLProtocol: URLProtocol {
 
     override class func canInit(with request: URLRequest) -> Bool {
         guard let url = request.url else { return false }
-        return url.scheme == "pctest" || url.host == "images.test"
+        return url.scheme == "pctest" || url.host == "images.test" || documentHosts.contains(url.host ?? "")
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -59,6 +65,24 @@ final class FixtureURLProtocol: URLProtocol {
             Self.seen.append(Seen(url: url, referer: request.value(forHTTPHeaderField: "Referer"), cookie: cookie))
         }
         let name = url.lastPathComponent
+        if name == "redirect",
+           let to = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "to" })?.value,
+           let target = URL(string: to) {
+            var next = request
+            next.url = target
+            let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Location": to, "Content-Length": "0"])!
+            client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: response)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        if name == "stall.pdf" {
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/pdf"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data("%PDF-1.4\n".utf8) + Data(count: 1 << 17))
+            return
+        }
         let status: Int
         let mime: String
         let body: Data
@@ -66,6 +90,10 @@ final class FixtureURLProtocol: URLProtocol {
             (status, mime, body) = (404, "text/plain", Data("nope".utf8))
         } else if name.hasPrefix("login") {
             (status, mime, body) = (200, "text/html", Data("<html>sign in</html>".utf8))
+        } else if Self.documentHosts.contains(url.host ?? "") {
+            let file = Bundle.module.url(forResource: "Fixtures/documents/\(name)", withExtension: nil)
+            (status, mime, body) = file.flatMap { try? Data(contentsOf: $0) }
+                .map { (200, "application/octet-stream", $0) } ?? (404, "text/plain", Data("nope".utf8))
         } else if url.pathExtension == "css" {
             let file = Bundle.module.url(forResource: "Fixtures/styles/\(name)", withExtension: nil)
             (status, mime, body) = (200, "text/css", file.flatMap { try? Data(contentsOf: $0) } ?? Data())

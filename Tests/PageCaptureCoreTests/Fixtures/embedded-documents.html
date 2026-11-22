@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Embedded documents</title>
+<style>
+  body { margin: 0; display: grid; grid-template-columns: repeat(3, 240px); gap: 10px; padding: 10px; }
+  iframe, embed, object { width: 240px; height: 150px; border: 0; display: block; }
+</style>
+</head>
+<body>
+<h1>Documents page</h1>
+<iframe id="pdf" src="https://documents.test/text.pdf"></iframe>
+<embed id="embed" type="application/pdf" src="https://documents.test/report">
+<object id="object" data="https://documents.test/document.docx"></object>
+<iframe id="viewer" src="https://view.officeapps.live.com/op/embed.aspx?src=https%3A%2F%2Fdocuments.test%2Fslides.pptx"></iframe>
+<iframe id="viewer-without-src" src="https://view.officeapps.live.com/op/embed.aspx?ui=en-US"></iframe>
+<iframe id="doc" src="https://documents.test/old.doc"></iframe>
+<iframe id="page" src="pctest://frame.test/docs/frame.html"></iframe>
+<object id="html-object" data="https://documents.test/page.html"></object>
+<embed id="image" type="image/png" src="https://images.test/pixel.png">
+</body>
+</html>

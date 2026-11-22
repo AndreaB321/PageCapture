@@ -47,10 +47,11 @@ repeat step 3.
 4. [The three formats](#the-three-formats)
 5. [Reading Markdown on a Mac](#reading-markdown-on-a-mac)
 6. [Images and videos](#images-and-videos)
-7. [Signed-in sites](#signed-in-sites)
-8. [Keyboard shortcuts](#keyboard-shortcuts)
-9. [Tips and limits](#tips-and-limits)
-10. [Build from source](#build-from-source)
+7. [Documents](#documents)
+8. [Signed-in sites](#signed-in-sites)
+9. [Keyboard shortcuts](#keyboard-shortcuts)
+10. [Tips and limits](#tips-and-limits)
+11. [Build from source](#build-from-source)
 
 The same manual is inside the app: **Help → PageCapture Manual** (⌘?).
 
@@ -81,7 +82,10 @@ page: the part under the pointer is outlined. You can pick:
 - a **scrolling area** (a panel that scrolls on its own),
 - the page's **main article**, on sites that mark it, such as Wikipedia and most documentation
   sites. Side columns, toolbars and menus inside it are left out,
-- the **whole page**: click outside any outlined area, or press Return.
+- an **embedded document**: a PDF, Word, Excel or PowerPoint file shown in the page (see
+  [Documents](#documents)),
+- the **whole page**: click outside any outlined area, or press Return. When the page is itself a
+  PDF, this saves the PDF as a document.
 
 Press Esc, or ⌘⇧S again, to cancel.
 
@@ -184,11 +188,38 @@ videos you are allowed to keep.
 YouTube changes often. If YouTube videos stop downloading, choose **PageCapture → Update Download
 Tools**.
 
+## Documents
+
+When a page shows a PDF, Word (`.docx`), Excel (`.xlsx`, `.xls`), PowerPoint (`.pptx`) or Outlook
+(`.msg`) file, in a frame or embedded in the page, or through the Office Online or Google viewer,
+you can pick that document. When the page itself is a PDF, press Return.
+
+PageCapture does not scroll a document. It downloads the original file with your sign-in (the
+banner says "Downloading document…"; ⌘⇧S cancels), then the save panel offers two formats:
+
+- **Original**: the file itself, unchanged, e.g. `Name/Name.pdf`,
+- **Markdown**: its text, tables and headings as `Name/Name.md`, made on your Mac without
+  sending the file anywhere.
+
+A scanned PDF, which has no text, is read with the Mac's own text recognition. When a document has
+no readable text, or its Markdown cannot be made, the original is kept even if you only ticked
+Markdown, and the message says why. The two formats you tick are remembered separately from the
+page formats.
+
+When the original cannot be downloaded (the viewer does not give its address, the site sends a
+sign-in page or an error, the file is larger than 500 MB, or it is an old `.doc` or `.ppt` file),
+PageCapture captures the frame as a page instead, and the message says why.
+
 ## Signed-in sites
 
 To capture a page that needs an account, sign in inside PageCapture's own window, just as in any
 browser. PageCapture keeps that sign-in for next time. It does not use the sign-ins of Safari or
 Chrome.
+
+Images, stylesheets, videos and documents are downloaded with the cookies the browser itself would
+send for them from that page, so a file on another site gets only the cookies that site allows
+across sites. A saved original document is marked as downloaded from the web, so macOS and apps
+such as Office treat it with the same care as a browser download.
 
 When saving videos from YouTube or Vimeo, only that site's own cookies are passed to the download
 tool, in a private temporary file that is deleted straight away. Nothing temporary is written into
@@ -198,7 +229,7 @@ your capture folder.
 
 | Shortcut | What it does |
 | --- | --- |
-| ⌘⇧S | Start picking · cancel picking · stop capturing and keep what was collected |
+| ⌘⇧S | Start picking · cancel picking · stop capturing and keep what was collected · cancel a document download |
 | Return | While picking: capture the whole page |
 | Esc | While picking: cancel |
 | ⌘[ / ⌘] | Back / forward |
@@ -212,7 +243,7 @@ your capture folder.
 - The PDF links to saved videos with their full location on your Mac, so they stop working if you
   move the capture folder. The HTML and Markdown links keep working because they are relative.
 - Pop-up windows for signing in and links that open a new window are not supported yet.
-- Quitting during a save stops the download tools and cleans up first.
+- Quitting during a save or a document download stops it and cleans up first.
 
 ## Build from source
 
@@ -249,7 +280,9 @@ and the licence texts in `Contents/Resources/ThirdPartyNotices/`.
 
 The app also carries a Python runtime with Microsoft [MarkItDown](https://github.com/microsoft/markitdown)
 (MIT) in `Contents/Resources/markitdown`, built by `scripts/fetch-tools.sh markitdown`. It writes
-the Markdown of each capture, and is the basis for converting documents to Markdown in a later version.
+the Markdown of each capture and turns saved documents into Markdown (see [Documents](#documents)).
+`swift run PageCapture` has no bundled runtime, so there Markdown cannot be written (the other
+formats and a document's original are still saved); build the app with `scripts/build-app.sh` to try it.
 
 PageCapture uses code of [FFmpeg](https://ffmpeg.org) licensed under the
 [LGPLv2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html), and the MarkItDown runtime's

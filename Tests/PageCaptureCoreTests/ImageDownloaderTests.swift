@@ -77,9 +77,11 @@ final class ImageDownloaderTests: XCTestCase {
         XCTAssertEqual(result.failed, [])
     }
 
+    /// Cross-site with the page: a SameSite=None cookie, and the page's origin (SPEC "Saving").
     func testSendsRefererAndBrowserCookies() async throws {
         let cookie = try XCTUnwrap(HTTPCookie(properties: [
             .domain: "images.test", .path: "/", .name: "session", .value: "abc123", .secure: "TRUE",
+            .sameSitePolicy: "none",
         ]))
         _ = await ImageDownloader.download(
             ["https://images.test/private/a.png"], into: folder,
@@ -87,7 +89,7 @@ final class ImageDownloaderTests: XCTestCase {
             configuration: FixtureURLProtocol.configuration())
 
         let request = try XCTUnwrap(FixtureURLProtocol.requests.first)
-        XCTAssertEqual(request.referer, "https://site.test/page")
+        XCTAssertEqual(request.referer, "https://site.test/")
         XCTAssertEqual(request.cookie, "session=abc123")
     }
 }

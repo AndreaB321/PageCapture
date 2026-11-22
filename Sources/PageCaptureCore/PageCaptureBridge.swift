@@ -47,6 +47,9 @@ public final class PageCaptureBridge {
 
     /// Called when the user clicks a target in picker mode.
     public var onPick: ((CaptureTarget) -> Void)?
+    /// Called instead of `onPick` when the user clicks a document whose original cannot be saved
+    /// (SPEC "Documents"); `collect(.picked)` then captures it as a page.
+    public var onDocumentUnavailable: ((DocumentDownloadError) -> Void)?
 
     public weak var webView: WKWebView?
 
@@ -55,7 +58,12 @@ public final class PageCaptureBridge {
     /// Child frames by the token their parent frame named them with (see `capture.js`).
     private var framesByToken: [String: WKFrameInfo] = [:]
     private var isPicking = false
-    private var pickedFrame: WKFrameInfo?
+    /// What `collect(.picked)` collects (also when a picked document falls back to a page).
+    private var picked: PickedArea?
+    /// Whether the pick is the whole page, for the result message when a document falls back to a page.
+    public var pickedWholePage: Bool { picked == .wholePage }
+    /// The main frame's last response, so a page that is itself a document is one (see `pickWholePage()`).
+    private var mainFrameResponse: (url: URL?, mimeType: String?)?
     private var collectingFrame: WKFrameInfo?
     private var isCollecting = false
     /// Bumped to orphan a collection that never completes (see `abortCollection`).
@@ -96,14 +104,26 @@ public final class PageCaptureBridge {
     public func collect(_ target: CaptureTarget, timing: CollectionTiming = .init()) async throws -> CapturedContent {
         guard let webView else { throw PageCaptureError.noWebView }
         let frame: WKFrameInfo?
+        let wholeDocument: Bool
         switch target {
-        case .wholePage: frame = nil
-        case .picked:
-            guard let pickedFrame else { throw PageCaptureError.nothingPicked }
-            frame = pickedFrame
+        case .wholePage: (frame, wholeDocument) = (nil, true)
+        case .picked, .document: // a document is collected as a page when it falls back
+            switch picked {
+            case nil: throw PageCaptureError.nothingPicked
+            case .wholePage: (frame, wholeDocument) = (nil, true)
+            case .element(let pickedFrame): (frame, wholeDocument) = (pickedFrame, false)
+            case .frameDocument(let token, let surrounding):
+                if let child = await childFrame(token: token) {
+                    (frame, wholeDocument) = (child, true)
+                } else if case .element(let pickedFrame) = surrounding {
+                    (frame, wholeDocument) = (pickedFrame, false)
+                } else {
+                    (frame, wholeDocument) = (nil, true)
+                }
+            }
         }
         let options: [String: Any] = [
-            "wholePage": target == .wholePage,
+            "wholePage": wholeDocument,
             "stepRatio": timing.stepRatio,
             "settleDelay": timing.settleDelay,
             "stallDelay": timing.stallDelay,
@@ -161,6 +181,65 @@ public final class PageCaptureBridge {
         collectingFrame = nil
     }
 
+    // MARK: Documents
+
+    /// Records the main frame's response (from the navigation delegate's `decidePolicyFor
+    /// navigationResponse`), so `pickWholePage()` knows when the page itself is a PDF.
+    public func noteMainFrameResponse(_ response: URLResponse) {
+        mainFrameResponse = (response.url, response.mimeType)
+    }
+
+    /// Picks the whole page (Return, or a click outside any target) and returns the event for it:
+    /// a page that is itself a document is picked as one (SPEC "Documents").
+    public func pickWholePage() -> CaptureEvent {
+        picked = .wholePage
+        guard let url = webView?.url else { return .picked(.wholePage) }
+        let mimeType = mainFrameResponse.flatMap { Self.samePage($0.url, url) ? $0.mimeType : nil }
+            .flatMap { DocumentKind.genericMIMETypes.contains(DocumentKind.essence(of: $0)) ? nil : $0 }
+        // A known type that is not a document type makes it a page, whatever its URL looks like
+        // (`…/blob/main/paper.pdf` served as HTML).
+        if let mimeType, !mimeType.isEmpty, DocumentKind(mimeType: mimeType) == nil,
+           DocumentKind.unsupportedMIMETypes[DocumentKind.essence(of: mimeType)] == nil {
+            return .picked(.wholePage)
+        }
+        return Self.event(for: DocumentSource.detect(url: url, mimeType: mimeType)) ?? .picked(.wholePage)
+    }
+
+    private static func event(for detection: DocumentDetection?) -> CaptureEvent? {
+        switch detection {
+        case .document(let source): .picked(.document(source))
+        case .unavailable(let reason): .documentUnavailable(reason)
+        case nil: nil
+        }
+    }
+
+    /// The same document, whatever its fragment.
+    private static func samePage(_ a: URL?, _ b: URL) -> Bool {
+        func strip(_ url: URL) -> String {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.fragment = nil
+            return components?.string ?? url.absoluteString
+        }
+        return a.map(strip) == strip(b)
+    }
+
+    private func deliver(_ event: CaptureEvent) {
+        switch event {
+        case .picked(let target): onPick?(target)
+        case .documentUnavailable(let reason): onDocumentUnavailable?(reason)
+        default: break
+        }
+    }
+
+    /// The child frame its parent named `token`, waiting a moment for it to report (see `capture.js`).
+    private func childFrame(token: String) async -> WKFrameInfo? {
+        let deadline = ContinuousClock.now + Self.frameTokenWait
+        while framesByToken[token] == nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return framesByToken[token]
+    }
+
     // MARK: Messages
 
     fileprivate func receive(_ message: WKScriptMessage) {
@@ -176,11 +255,17 @@ public final class PageCaptureBridge {
             if isPicking { run("globalThis.__pageCapture.setPicking(true)", in: frame) }
         case "picked":
             guard isPicking else { return }
-            if body["kind"] as? String == "wholePage" {
-                pickedFrame = nil
-                onPick?(.wholePage)
+            // What was clicked, or what surrounds the embedded document that was.
+            let area: PickedArea = body["kind"] as? String == "wholePage" ? .wholePage : .element(frame)
+            if let src = body["src"] as? String, let url = URL(string: src),
+               let event = Self.event(for: DocumentSource.detect(url: url, mimeType: body["mimeType"] as? String)) {
+                // Its frame's own document is the page to capture if the original cannot be saved.
+                picked = (body["frameToken"] as? String).map { .frameDocument(token: $0, surrounding: area) } ?? area
+                deliver(event)
+            } else if area == .wholePage {
+                deliver(pickWholePage())
             } else {
-                pickedFrame = frame
+                picked = area
                 onPick?(.picked)
             }
         case "frameToken":
@@ -233,6 +318,16 @@ public final class PageCaptureBridge {
     private func run(_ script: String, in frame: WKFrameInfo?) {
         webView?.evaluateJavaScript(script, in: frame, in: Self.contentWorld) { _ in }
     }
+}
+
+/// What the user picked, for `collect(.picked)`.
+private enum PickedArea: Equatable {
+    case wholePage
+    /// A scrollable area, main content or frame document, which the frame's script remembers.
+    case element(WKFrameInfo)
+    /// An embedded document's frame, named `token` by its parent (see `capture.js`); `surrounding`
+    /// when that frame runs no script (it shows a plugin, or failed to load).
+    indirect case frameDocument(token: String, surrounding: PickedArea)
 }
 
 /// Resumes a continuation once, whichever of its callers comes first.

@@ -30,7 +30,7 @@ final class ExportFormatTests: XCTestCase {
         XCTAssertEqual(ExportFormatPreference.load(from: defaults), [.html, .markdown])
         XCTAssertNil(defaults.object(forKey: "exportFormat"))
         ExportFormatPreference.save([.html, .pdf, .markdown], to: defaults)
-        XCTAssertEqual(ExportFormatPreference.load(from: defaults), Set(ExportFormat.allCases))
+        XCTAssertEqual(ExportFormatPreference.load(from: defaults), Set(ExportSaveKind.page.formats))
     }
 
     func testChooserHasOneCheckboxPerFormatInOrder() {
@@ -40,6 +40,18 @@ final class ExportFormatTests: XCTestCase {
         XCTAssertTrue(chooser.checkboxes.allSatisfy { $0.isDescendant(of: chooser.view) })
         XCTAssertGreaterThan(chooser.view.frame.width, 0)
         XCTAssertEqual(chooser.selection, [.html, .markdown])
+    }
+
+    func testDocumentChooserOffersTheOriginalNamedByItsTypeAndMarkdown() {
+        let chooser = FormatChooser(selection: [.original], kind: .document, original: .docx)
+        XCTAssertEqual(chooser.checkboxes.map(\.title), ["Original (.docx)", "Markdown"])
+        XCTAssertEqual(chooser.checkboxes.map(\.state), [.on, .off])
+        XCTAssertEqual(chooser.selection, [.original])
+        chooser.checkboxes[1].performClick(nil)
+        XCTAssertEqual(chooser.selection, [.original, .markdown])
+        chooser.checkboxes[0].performClick(nil)
+        chooser.checkboxes[1].performClick(nil)
+        XCTAssertEqual(chooser.selection, [.markdown], "at least one stays ticked")
     }
 
     func testTheLastTickedFormatCannotBeUnticked() {

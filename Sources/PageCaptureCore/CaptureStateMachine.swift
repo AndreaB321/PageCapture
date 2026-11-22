@@ -5,6 +5,8 @@ public enum CaptureTarget: Equatable, Sendable {
     /// A frame document or scrollable element chosen with the picker. The page bridge remembers
     /// which frame and element it was.
     case picked
+    /// An embedded document (or the page being one) whose original can be downloaded (SPEC "Documents").
+    case document(DocumentSource)
 }
 
 /// The phases of the ⌘⇧S flow (SPEC "Shortcut and banner").
@@ -14,6 +16,8 @@ public enum CapturePhase: Equatable, Sendable {
     case capturing(CaptureTarget)
     /// The user asked to stop; the collector is returning what it has.
     case stopping(CaptureTarget)
+    /// A picked document's original is being downloaded; nothing is scrolled.
+    case downloadingDocument(DocumentSource)
     /// Collection ended; the save step owns the screen.
     case saving
 }
@@ -33,6 +37,12 @@ public enum CaptureEvent: Equatable, Sendable {
     case saveFinished
     /// The main frame committed a navigation: whatever the picker or collector was aimed at is gone.
     case navigated
+    /// The picked document's original was downloaded.
+    case documentDownloaded
+    /// The picked document's original cannot be saved: while downloading (an HTTP error, a sign-in
+    /// page, …) or already while picking (a viewer without the original's URL, an unsupported type).
+    /// Its frame is captured as a page instead.
+    case documentUnavailable(DocumentDownloadError)
 }
 
 /// Side effects the app performs in response to a transition.
@@ -44,11 +54,21 @@ public enum CaptureEffect: Equatable, Sendable {
     /// Drop a running collection without saving: its result, if it ever arrives, is ignored.
     case abortCollection
     case presentSave
+    case downloadDocument(DocumentSource)
+    /// Drop a running document download; its result, if it ever arrives, is ignored.
+    case cancelDocumentDownload
+    /// The save panel with the document formats, for the downloaded original.
+    case presentDocumentSave(DocumentSource)
 }
 
 /// Pure state machine for the capture flow. The app feeds it events and performs the effects.
 public struct CaptureStateMachine: Equatable, Sendable {
-    public private(set) var phase: CapturePhase = .idle
+    public private(set) var phase: CapturePhase = .idle {
+        didSet { if phase == .idle { documentFallback = nil } }
+    }
+    /// Why a picked document is being captured as a page; kept until the flow is back to idle,
+    /// for the result message (`ExportResult.documentFallback`).
+    public private(set) var documentFallback: DocumentDownloadError?
 
     public init() {}
 
@@ -57,6 +77,7 @@ public struct CaptureStateMachine: Equatable, Sendable {
         switch phase {
         case .picking: "Pick a frame, scrolling area or article… (Return = whole page, Esc = cancel)"
         case .capturing, .stopping: "Capturing…"
+        case .downloadingDocument: "Downloading document…"
         case .idle, .saving: nil
         }
     }
@@ -103,6 +124,23 @@ public struct CaptureStateMachine: Equatable, Sendable {
             phase = .idle
             return []
 
+        case let (.picking, .documentUnavailable(reason)):
+            documentFallback = reason
+            return begin(.picked)
+
+        case let (.downloadingDocument(source), .documentDownloaded):
+            phase = .saving
+            return [.presentDocumentSave(source)]
+
+        case let (.downloadingDocument, .documentUnavailable(reason)):
+            documentFallback = reason
+            phase = .capturing(.picked)
+            return [.beginCollection(.picked)]
+
+        case (.downloadingDocument, .shortcut), (.downloadingDocument, .navigated):
+            phase = .idle
+            return [.cancelDocumentDownload]
+
         case (.saving, .saveFinished):
             phase = .idle
             return []
@@ -113,6 +151,10 @@ public struct CaptureStateMachine: Equatable, Sendable {
     }
 
     private mutating func begin(_ target: CaptureTarget) -> [CaptureEffect] {
+        if case .document(let source) = target {
+            phase = .downloadingDocument(source)
+            return [.endPicking, .downloadDocument(source)]
+        }
         phase = .capturing(target)
         return [.endPicking, .beginCollection(target)]
     }
