@@ -70,17 +70,21 @@ public enum ExportFormatPreference {
     }
 }
 
-/// The save panel's accessory: one checkbox per format. Unticking the last ticked box ticks it again,
-/// so at least one format is always chosen.
+/// The save panel's accessory: one checkbox per format `kind` offers. Unticking the last ticked box
+/// ticks it again, so at least one format is always chosen.
 @MainActor
 public final class FormatChooser: NSObject {
     public let view: NSView
-    /// In `ExportFormat.allCases` order.
+    /// In `kind.formats` order.
     public let checkboxes: [NSButton]
+    private let formats: [ExportFormat]
 
-    public init(selection: Set<ExportFormat>) {
-        let boxes = ExportFormat.allCases.map { format in
-            let box = NSButton(checkboxWithTitle: format.title, target: nil, action: nil)
+    /// - Parameter original: for a document, its type, which the Original checkbox names ("Original (.pdf)").
+    public init(selection: Set<ExportFormat>, kind: ExportSaveKind = .page, original: DocumentKind? = nil) {
+        formats = kind.formats
+        let boxes = kind.formats.map { format in
+            let title = if format == .original, let original { "\(format.title) (.\(original.fileExtension))" } else { format.title }
+            let box = NSButton(checkboxWithTitle: title, target: nil, action: nil)
             box.state = selection.contains(format) ? .on : .off
             return box
         }
@@ -100,7 +104,7 @@ public final class FormatChooser: NSObject {
     }
 
     public var selection: Set<ExportFormat> {
-        Set(zip(ExportFormat.allCases, checkboxes).filter { $0.1.state == .on }.map(\.0))
+        Set(zip(formats, checkboxes).filter { $0.1.state == .on }.map(\.0))
     }
 
     @objc private func toggled(_ sender: NSButton) {

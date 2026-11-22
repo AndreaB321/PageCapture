@@ -2,7 +2,8 @@
 // Injected at document start into every frame (cross-origin iframes included) in the PageCapture
 // content world, after merge.js. Talks to the app through the `pageCapture` message handler:
 //   { type: 'frameReady' }                                  when this frame's document starts
-//   { type: 'picked', kind: 'element'|'document'|'wholePage' }  when the user clicks in picker mode
+//   { type: 'picked', kind: 'element'|'document'|'wholePage' }  when the user clicks in picker mode;
+//     for an embedded document (see shields) also { src, mimeType, frameToken? }
 //   { type: 'frameToken', token }                           when the parent frame names this frame
 // and asks it through the `pageCaptureAsk` handler, which replies:
 //   { type: 'frameVideos', tokens, options } → { token: JSON of frameVideos() in that child frame }
@@ -23,7 +24,8 @@
   // ---------------------------------------------------------------- picker
 
   // `captured`: the hovered target and the nodes its highlight outlines (see capturedRect()).
-  const picker = { active: false, hovered: null, picked: null, overlay: null, captured: null };
+  // `shields`: the covers over embedded documents while picking (see showShields()).
+  const picker = { active: false, hovered: null, picked: null, overlay: null, captured: null, shields: [] };
 
   function isScrollable(el) {
     if (el === document.scrollingElement) return false; // that is the frame document itself
@@ -249,12 +251,74 @@
     });
   }
 
+  // ------------------------------------------------- embedded documents
+  //
+  // A PDF or Office file in an <embed>/<object>, or in a frame that shows it directly or through an
+  // online viewer, takes the mouse itself (a plugin or another document), so this document never
+  // sees the clicks on it. While picking, each such element is covered by a transparent shield that
+  // does. This only finds candidates by their URL; the app decides what is a document it can save
+  // (DocumentSource), and a candidate that is not one is picked as what surrounds it.
+  const FRAMES = 'iframe, frame';
+  const EMBEDS = 'embed, object';
+  // The SPEC's types, plus the ones the app reports as unsupported.
+  const DOCUMENT_PATH = /\.(pdf|docx|pptx|xlsx|xls|msg|doc|ppt|rtf|odt|ods|odp)$/i;
+  const VIEWER = /^https?:\/\/(view\.officeapps\.live\.com\/op\/(embed|view)\.aspx|docs\.google\.com\/g?view(er)?|drive\.google\.com\/viewerng\/viewer)([?#]|$)/i;
+  const NOT_DOCUMENT_TYPE = /^\s*(image|video|audio|text)\//i;
+
+  // The element's resolved `src` (`data` for <object>), or null.
+  function embeddedURL(el) {
+    const value = el.getAttribute(el.localName === 'object' ? 'data' : 'src');
+    if (!value) return null;
+    try { return new URL(value, document.baseURI).href; } catch (e) { return null; }
+  }
+
+  function isDocumentCandidate(el) {
+    const url = embeddedURL(el);
+    if (!url || !/^https?:/i.test(url)) return false;
+    if (el.matches(EMBEDS)) return !NOT_DOCUMENT_TYPE.test(el.getAttribute('type') || '');
+    return DOCUMENT_PATH.test(new URL(url).pathname) || VIEWER.test(url);
+  }
+
+  function placeShield(shield) {
+    const r = shield.__pcEmbed.getBoundingClientRect();
+    Object.assign(shield.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  }
+
+  function showShields() {
+    for (const el of document.querySelectorAll(FRAMES + ', ' + EMBEDS)) {
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || !isDocumentCandidate(el)) continue;
+      const shield = document.createElement('div');
+      shield.setAttribute(UI_ATTR, 'shield');
+      shield.style.cssText = 'position:fixed;z-index:2147483646;background:transparent;margin:0;padding:0;' +
+        'border:0;cursor:pointer;';
+      shield.__pcEmbed = el;
+      placeShield(shield);
+      document.documentElement.appendChild(shield);
+      picker.shields.push(shield);
+    }
+  }
+
+  function hideShields() {
+    for (const shield of picker.shields) shield.remove();
+    picker.shields = [];
+  }
+
+  // The embedded document a shield covers, or null.
+  function shieldedAt(node) {
+    return node && node.__pcEmbed && picker.shields.includes(node) ? node.__pcEmbed : null;
+  }
+
   function setPicking(on) {
+    const was = picker.active;
     picker.active = !!on;
     picker.captured = null;
     if (!picker.active) {
       highlight(null);
       if (picker.overlay) picker.overlay.remove();
+      hideShields();
+    } else if (!was) {
+      showShields();
     }
   }
 
@@ -265,18 +329,20 @@
   }
 
   window.addEventListener('mousemove', (e) => {
-    if (picker.active) highlight(targetAt(e.target));
+    if (picker.active) highlight(shieldedAt(e.target) || targetAt(e.target));
   }, true);
   window.addEventListener('mouseout', (e) => {
     const to = e.relatedTarget;
     if (picker.active && (!to || to.localName === 'iframe' || to.localName === 'frame')) highlight(null);
   }, true);
   window.addEventListener('scroll', () => {
+    picker.shields.forEach(placeShield);
     if (picker.active && picker.hovered) highlight(picker.hovered);
   }, true);
   // A new layout may put the furniture elsewhere.
   window.addEventListener('resize', () => {
     picker.captured = null;
+    picker.shields.forEach(placeShield);
     if (picker.active && picker.hovered) highlight(picker.hovered);
   });
   for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick', 'auxclick', 'contextmenu']) {
@@ -285,10 +351,19 @@
   window.addEventListener('click', (e) => {
     if (!picker.active) return;
     swallow(e);
-    const target = targetAt(e.target);
+    const embed = shieldedAt(e.target);
+    // An embedded document is picked as what surrounds it when the app cannot save it.
+    const target = targetAt(embed || e.target);
     picker.picked = target;
     setPicking(false);
-    post({ type: 'picked', kind: target === null ? 'wholePage' : target === document ? 'document' : 'element' });
+    const message = { type: 'picked', kind: target === null ? 'wholePage' : target === document ? 'document' : 'element' };
+    if (embed) {
+      message.src = embeddedURL(embed);
+      message.mimeType = embed.getAttribute('type') || '';
+      // A frame's own document is captured instead, if it runs this script (see frameToken()).
+      if (embed.matches(FRAMES)) message.frameToken = frameToken(embed, { frames: new Map() });
+    }
+    post(message);
   }, true);
 
   // ------------------------------------------------------------- collector

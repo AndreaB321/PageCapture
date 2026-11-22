@@ -42,6 +42,18 @@ final class ExportFormatTests: XCTestCase {
         XCTAssertEqual(chooser.selection, [.html, .markdown])
     }
 
+    func testDocumentChooserOffersTheOriginalNamedByItsTypeAndMarkdown() {
+        let chooser = FormatChooser(selection: [.original], kind: .document, original: .docx)
+        XCTAssertEqual(chooser.checkboxes.map(\.title), ["Original (.docx)", "Markdown"])
+        XCTAssertEqual(chooser.checkboxes.map(\.state), [.on, .off])
+        XCTAssertEqual(chooser.selection, [.original])
+        chooser.checkboxes[1].performClick(nil)
+        XCTAssertEqual(chooser.selection, [.original, .markdown])
+        chooser.checkboxes[0].performClick(nil)
+        chooser.checkboxes[1].performClick(nil)
+        XCTAssertEqual(chooser.selection, [.markdown], "at least one stays ticked")
+    }
+
     func testTheLastTickedFormatCannotBeUnticked() {
         let chooser = FormatChooser(selection: [.pdf])
         chooser.checkboxes[1].performClick(nil)
