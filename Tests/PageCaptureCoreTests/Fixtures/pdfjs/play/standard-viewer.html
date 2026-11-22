@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<!-- The standard PDF.js viewer (web/viewer.html): `PDFViewerApplication.url` names the PDF. It
+     also fetches another PDF, so only that URL can name book.pdf. -->
+<html><head><title>PDF.js viewer</title>
+<style>html, body { margin: 0; } #viewerContainer { height: 900px; background: #eee; }</style>
+</head><body>
+<div id="viewerContainer"><canvas></canvas></div>
+<script>
+  window.PDFViewerApplication = { url: 'content/book.pdf', baseUrl: 'content/book.pdf' };
+  fetch('content/document.pdf?v=1').then((r) => r.arrayBuffer()).then(() => { document.body.dataset.loaded = 'yes'; });
+</script>
+</body></html>

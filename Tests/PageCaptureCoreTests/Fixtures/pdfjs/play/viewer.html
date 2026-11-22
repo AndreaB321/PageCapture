@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!-- A custom e-book player built on PDF.js: fetches its PDF and draws each page into a <canvas>.
+     PDF.js itself is not here: `pdfjsLib` only marks the page as running it. -->
+<html><head><title>Player</title>
+<style>html, body { margin: 0; } canvas { display: block; width: 100%; height: 900px; background: #eee; }</style>
+</head><body>
+<canvas id="page1"></canvas>
+<script>
+  window.pdfjsLib = {};
+  fetch('content/document.pdf?v=1').then((r) => r.arrayBuffer()).then((bytes) => {
+    const g = document.getElementById('page1').getContext('2d');
+    g.fillText('Page 1 of a ' + bytes.byteLength + '-byte PDF', 10, 20);
+    document.body.dataset.loaded = 'yes';
+  });
+</script>
+</body></html>

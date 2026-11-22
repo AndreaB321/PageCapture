@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<!-- The SCORM wrapper frame: shows the player named by `?player=` in a nested frame. -->
+<html><head><title>SCORM</title>
+<style>html, body { margin: 0; height: 100%; } iframe { display: block; border: 0; width: 100%; height: 100%; }</style>
+</head><body>
+<iframe id="player"></iframe>
+<script>
+  const player = new URLSearchParams(location.search).get('player');
+  document.getElementById('player').src = 'play/' + player + '?jwt=token';
+</script>
+</body></html>

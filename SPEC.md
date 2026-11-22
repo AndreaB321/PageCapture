@@ -112,6 +112,16 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   (`docs.google.com/viewer?url=<url>`, `docs.google.com/gview?url=<url>`,
   `drive.google.com/viewerng/viewer?url=<url>`). The original's URL is percent-decoded; a viewer
   inside a viewer is unwrapped once at most.
+- A frame (or the page) that runs PDF.js (it defines `pdfjsLib` or `PDFViewerApplication`, read
+  from the page's own scripts when picking starts) is a PDF viewer, and counts as a PDF document
+  when its PDF's URL is found: the standard viewer's `PDFViewerApplication.url` (else `.baseUrl`),
+  unless it is a `blob:` or `data:` URL; otherwise the PDF the frame itself fetched (a resource
+  whose path ends in `.pdf`, loaded by `fetch`, `XMLHttpRequest` or the viewer itself; the largest
+  when there are several). Custom viewers that draw each page into a `<canvas>` (e-book players,
+  SCORM course packages) save nothing useful as a page, so this is how they are saved. A click
+  anywhere in such a viewer picks its PDF; Return (or a click outside any target) picks it when it
+  is the only PDF viewer the user can see, at any frame depth, and covers at least half of the
+  view. A viewer whose PDF is not found is picked as a frame or page, as before.
 - Nothing is scrolled. The app downloads the original with the browser's cookies and Referer for
   the page (see "Saving"), up to 500 MB, into a private temporary folder that is removed after the
   save, when the save panel is cancelled, and when the app quits (during the download or with the
