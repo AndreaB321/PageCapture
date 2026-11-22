@@ -79,6 +79,13 @@ fetch() {
     check_and_place "$url" "$dest" "$sha"
 }
 
+# copy_pinned SRC DEST SHA256: like fetch, for a file kept in the repository (scripts/licenses).
+copy_pinned() {
+    local src=$1 dest=$2 sha=$3
+    cp "$src" "$dest.part"
+    check_and_place "$src" "$dest" "$sha"
+}
+
 # fetch_base64 URL DEST SHA256: like fetch, for googlesource's ?format=TEXT (base64) file view;
 # the hash is that of the decoded file.
 fetch_base64() {
