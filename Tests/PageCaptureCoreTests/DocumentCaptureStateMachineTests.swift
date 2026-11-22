@@ -96,6 +96,6 @@ final class DocumentCaptureStateMachineTests: XCTestCase {
     func testFormatsOfferedPerKind() {
         XCTAssertEqual(ExportSaveKind.page.formats.map(\.title), ["HTML", "PDF", "Markdown"])
         XCTAssertEqual(ExportSaveKind.document.formats.map(\.title), ["Original", "Markdown"])
-        XCTAssertEqual(ExportFormat.allCases, ExportSaveKind.page.formats)
+        XCTAssertEqual(ExportFormat.allCases, [.html, .pdf, .markdown, .original])
     }
 }

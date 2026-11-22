@@ -17,6 +17,8 @@ public struct ExportResult: Equatable, Sendable {
     public var documentMarkdownFailure: DocumentMarkdownFailure?
     /// Set by the app when a picked document could not be downloaded and its frame was captured as a page.
     public var documentFallback: DocumentDownloadError?
+    /// Whether the fallback captured the whole page (the page itself was the document) rather than a frame.
+    public var documentFallbackIsWholePage = false
 
     public var savedVideoCount: Int { videos.values.filter { $0.outcome == .saved }.count }
     public var protectedVideoCount: Int { videos.values.filter { $0.outcome == .protected }.count }
@@ -40,7 +42,8 @@ public struct ExportResult: Equatable, Sendable {
         }
         if let documentMarkdownFailure { notes.append(documentMarkdownFailure.note) }
         if let documentFallback {
-            notes.append("the document could not be downloaded (\(documentFallback.reason)), so the frame was captured as a page")
+            let instead = documentFallbackIsWholePage ? "the page was captured instead" : "the frame was captured as a page"
+            notes.append("the document could not be downloaded (\(documentFallback.reason)), so \(instead)")
         }
         var text = "Saved to \(folder.path)"
         if !notes.isEmpty { text += " (\(notes.joined(separator: "; ")))" }

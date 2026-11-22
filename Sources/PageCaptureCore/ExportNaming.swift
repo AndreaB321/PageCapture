@@ -26,8 +26,34 @@ public enum ExportNaming {
             .split(separator: " ", omittingEmptySubsequences: true)
             .joined(separator: " ")
         name = String(name.prefix(100))
+        name = utf8Prefix(name, bytes: 200)
         name = name.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
         return name.isEmpty ? "Capture" : name
+    }
+
+    /// The default name for a saved document: its URL's file name without the extension, else the page
+    /// title, else "Document" (`/` and a bare host give no file name).
+    public static func documentName(url: URL, pageTitle: String?) -> String {
+        let last = url.deletingPathExtension().lastPathComponent
+        let fromURL = last == "/" ? "" : (last.removingPercentEncoding ?? last)
+        for candidate in [fromURL, pageTitle ?? ""] {
+            let name = sanitizedName(fromTitle: candidate)
+            if name != "Capture", name.contains(where: { $0 != "-" }) { return name }
+        }
+        return "Document"
+    }
+
+    /// The longest prefix of `text` of at most `bytes` UTF-8 bytes, never splitting a character.
+    private static func utf8Prefix(_ text: String, bytes: Int) -> String {
+        var used = 0
+        var end = text.startIndex
+        for index in text.indices {
+            let size = String(text[index]).utf8.count
+            if used + size > bytes { break }
+            used += size
+            end = text.index(after: index)
+        }
+        return String(text[..<end])
     }
 
     /// The file name for the image at `index` (0-based) of `CapturedContent.imageURLs`:

@@ -29,14 +29,19 @@ final class DocumentPickerTests: XCTestCase {
         window = NSWindow(contentRect: webView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = webView
+        window.acceptsMouseMovedEvents = true
         window.orderFrontRegardless()
         events = []
         bridge.onPick = { [unowned self] in events.append(.picked($0)) }
         bridge.onDocumentUnavailable = { [unowned self] in events.append(.documentUnavailable($0)) }
-        webView.load(URLRequest(url: URL(string: "pctest://main.test/embedded-documents.html")!))
-        try await waitUntil("page loaded") {
+        try await load("embedded-documents.html")
+    }
+
+    private func load(_ fixture: String) async throws {
+        webView.load(URLRequest(url: URL(string: "pctest://main.test/\(fixture)")!))
+        try await waitUntil("\(fixture) loaded") {
             guard self.bridge.knownFrames.contains(where: \.isMainFrame) else { return false }
-            return try await self.evaluate("document.readyState") == "complete"
+            return try await self.evaluate("document.readyState + location.pathname") == "complete/\(fixture)"
         }
     }
 
@@ -92,6 +97,45 @@ final class DocumentPickerTests: XCTestCase {
         XCTAssertEqual(vshield, "shield")
     }
 
+    /// The shield of an `<object>` or `<embed>` whose URL and type are not a document's is not added:
+    /// its HTML content is picked as a frame is.
+    func testObjectShowingAnHTMLPageIsNotShielded() async throws {
+        bridge.setPicking(true)
+        defer { bridge.setPicking(false) }
+        try await Task.sleep(for: .milliseconds(100))
+        let v = try await evaluate(hit("#html-object") + ".id")
+        XCTAssertEqual(v, "html-object")
+    }
+
+    /// A page that clicks the shield itself (from a MutationObserver, as soon as it appears) picks nothing.
+    func testPageCannotPickForTheUser() async throws {
+        try await load("self-picking-page.html")
+        bridge.setPicking(true)
+        defer { bridge.setPicking(false) }
+        try await Task.sleep(for: .milliseconds(500))
+        let seen = try await evaluate("String(window.shieldsSeen)")
+        XCTAssertEqual(seen, "1", "the page saw the shield and clicked it")
+        XCTAssertEqual(events, [])
+        // The user's own click still picks.
+        try await realClick(hit("#embed"))
+        try await waitUntil("pick message") { !self.events.isEmpty }
+        XCTAssertEqual(events, [.picked(.document(DocumentSource(url: URL(string: "https://documents.test/report.pdf")!, kind: .pdf)))])
+    }
+
+    /// Embeds the user cannot see are not targets: no shield, and a click picks what is under them.
+    func testInvisibleEmbedsAreNotShielded() async throws {
+        try await load("invisible-embeds.html")
+        bridge.setPicking(true)
+        defer { bridge.setPicking(false) }
+        try await Task.sleep(for: .milliseconds(100))
+        let shields = try await evaluate("String(document.querySelectorAll('[data-pagecapture-ui=shield]').length)")
+        XCTAssertEqual(shields, "0")
+        try await realClick("document.querySelector('h1')")
+        try await waitUntil("pick message") { !self.events.isEmpty }
+        // What is under the embeds (the page's <main>), not a document.
+        XCTAssertEqual(events, [.picked(.picked)])
+    }
+
     func testShieldsGoWhenPickingEnds() async throws {
         bridge.setPicking(true)
         try await Task.sleep(for: .milliseconds(100))
@@ -127,16 +171,28 @@ final class DocumentPickerTests: XCTestCase {
     private func pick(_ selector: String) async throws {
         bridge.setPicking(true)
         try await Task.sleep(for: .milliseconds(100))
-        _ = try await evaluate("""
-            (() => {
-              const el = \(hit(selector));
-              el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              return 'ok';
-            })()
-            """)
+        try await realClick(hit(selector))
         try await waitUntil("pick message") { !self.events.isEmpty }
         bridge.setPicking(false)
+    }
+
+    /// A real (trusted) click at the centre of the element `expression` evaluates to, sent to the window.
+    private func realClick(_ expression: String) async throws {
+        let centre = try await evaluate("""
+            (() => {
+              const r = \(expression).getBoundingClientRect();
+              return (r.left + r.width / 2) + ',' + (r.top + r.height / 2);
+            })()
+            """)
+        let parts = try XCTUnwrap(centre).split(separator: ",").compactMap { Double($0) }
+        let point = NSPoint(x: parts[0], y: webView.bounds.height - parts[1])
+        for type in [NSEvent.EventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            window.sendEvent(event)
+            try await Task.sleep(for: .milliseconds(30))
+        }
     }
 
     private func evaluate(_ script: String) async throws -> String? {
@@ -159,5 +215,55 @@ final class DocumentPickerTests: XCTestCase {
         }
         XCTFail("Timed out waiting for \(what)")
         throw CancellationError()
+    }
+
+    // MARK: Whole page
+
+    /// `…/blob/main/paper.pdf` served as `text/html` is a page, whatever its URL looks like.
+    func testPageServedAsHTMLIsNotADocumentWhateverItsURL() async throws {
+        let server = try await FixtureHTTPServer.start()
+        defer { server.stop() }
+        server.route("/blob/main/paper.pdf", Data("<html><body>Not a PDF</body></html>".utf8), contentType: "text/html")
+        let page = PageCaptureBridge()
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), configuration: configuration)
+        page.webView = view
+        let delegate = ResponseNoter(bridge: page)
+        view.navigationDelegate = delegate
+        let url = try XCTUnwrap(URL(string: server.url("/blob/main/paper.pdf")))
+        view.load(URLRequest(url: url))
+        try await waitUntil("page loaded") { !view.isLoading && view.url == url }
+        XCTAssertEqual(page.pickWholePage(), .picked(.wholePage))
+        withExtendedLifetime(delegate) {}
+    }
+
+    /// The same URL served as a PDF is still a document.
+    func testPageServedAsPDFIsADocument() async throws {
+        let server = try await FixtureHTTPServer.start()
+        defer { server.stop() }
+        server.route("/blob/main/paper.pdf", Data("%PDF-1.4\n%%EOF\n".utf8), contentType: "application/pdf")
+        let page = PageCaptureBridge()
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        page.webView = view
+        let delegate = ResponseNoter(bridge: page)
+        view.navigationDelegate = delegate
+        let url = try XCTUnwrap(URL(string: server.url("/blob/main/paper.pdf")))
+        view.load(URLRequest(url: url))
+        try await waitUntil("page loaded") { !view.isLoading && view.url == url }
+        XCTAssertEqual(page.pickWholePage(), .picked(.document(DocumentSource(url: url, kind: .pdf))))
+        withExtendedLifetime(delegate) {}
+    }
+}
+
+/// Gives the bridge the main frame's response, as the app's navigation delegate does.
+@MainActor
+private final class ResponseNoter: NSObject, WKNavigationDelegate {
+    let bridge: PageCaptureBridge
+    init(bridge: PageCaptureBridge) { self.bridge = bridge }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if navigationResponse.isForMainFrame { bridge.noteMainFrameResponse(navigationResponse.response) }
+        return .allow
     }
 }

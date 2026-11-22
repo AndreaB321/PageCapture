@@ -263,7 +263,8 @@
   // The SPEC's types, plus the ones the app reports as unsupported.
   const DOCUMENT_PATH = /\.(pdf|docx|pptx|xlsx|xls|msg|doc|ppt|rtf|odt|ods|odp)$/i;
   const VIEWER = /^https?:\/\/(view\.officeapps\.live\.com\/op\/(embed|view)\.aspx|docs\.google\.com\/g?view(er)?|drive\.google\.com\/viewerng\/viewer)([?#]|$)/i;
-  const NOT_DOCUMENT_TYPE = /^\s*(image|video|audio|text)\//i;
+  // The `type` of an <embed>/<object> that is a document (SPEC types, and the unsupported ones).
+  const DOCUMENT_TYPE = /^\s*application\/(pdf|msword|rtf|vnd\.(openxmlformats-officedocument\.|ms-(excel|powerpoint|outlook)|oasis\.opendocument\.))/i;
 
   // The element's resolved `src` (`data` for <object>), or null.
   function embeddedURL(el) {
@@ -275,8 +276,27 @@
   function isDocumentCandidate(el) {
     const url = embeddedURL(el);
     if (!url || !/^https?:/i.test(url)) return false;
-    if (el.matches(EMBEDS)) return !NOT_DOCUMENT_TYPE.test(el.getAttribute('type') || '');
+    // An <embed>/<object> of another type (or none) with a plain URL shows a page or an image, which
+    // is picked as what it is, so only a document type or a document URL qualifies.
+    if (el.matches(EMBEDS) && DOCUMENT_TYPE.test(el.getAttribute('type') || '')) return true;
     return DOCUMENT_PATH.test(new URL(url).pathname) || VIEWER.test(url);
+  }
+
+  // Whether the user can see `el`: an invisible <embed>/<object> is not a target. Off-screen means
+  // outside the page's area (left of or above its origin, or beyond its far edges), not just the
+  // part of the page in view, which scrolling changes.
+  function isVisibleEmbed(el, rect) {
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const root = document.documentElement;
+    if (rect.right + window.scrollX <= 0 || rect.bottom + window.scrollY <= 0 ||
+        rect.left + window.scrollX >= Math.max(root.scrollWidth, window.innerWidth) ||
+        rect.top + window.scrollY >= Math.max(root.scrollHeight, window.innerHeight)) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      if (parseFloat(getComputedStyle(node).opacity) === 0) return false;
+    }
+    return true;
   }
 
   function placeShield(shield) {
@@ -287,7 +307,9 @@
   function showShields() {
     for (const el of document.querySelectorAll(FRAMES + ', ' + EMBEDS)) {
       const r = el.getBoundingClientRect();
-      if (r.width <= 0 || r.height <= 0 || !isDocumentCandidate(el)) continue;
+      if (!isDocumentCandidate(el)) continue;
+      if (el.matches(EMBEDS) && !isVisibleEmbed(el, r)) continue;
+      if (r.width <= 0 || r.height <= 0) continue;
       const shield = document.createElement('div');
       shield.setAttribute(UI_ATTR, 'shield');
       shield.style.cssText = 'position:fixed;z-index:2147483646;background:transparent;margin:0;padding:0;' +
@@ -322,18 +344,19 @@
     }
   }
 
+  // Only the user's own events pick: a page can dispatch (or `click()`) events on what it sees.
   function swallow(e) {
-    if (!picker.active) return;
+    if (!picker.active || !e.isTrusted) return;
     e.preventDefault();
     e.stopImmediatePropagation();
   }
 
   window.addEventListener('mousemove', (e) => {
-    if (picker.active) highlight(shieldedAt(e.target) || targetAt(e.target));
+    if (picker.active && e.isTrusted) highlight(shieldedAt(e.target) || targetAt(e.target));
   }, true);
   window.addEventListener('mouseout', (e) => {
     const to = e.relatedTarget;
-    if (picker.active && (!to || to.localName === 'iframe' || to.localName === 'frame')) highlight(null);
+    if (picker.active && e.isTrusted && (!to || to.localName === 'iframe' || to.localName === 'frame')) highlight(null);
   }, true);
   window.addEventListener('scroll', () => {
     picker.shields.forEach(placeShield);
@@ -349,7 +372,7 @@
     window.addEventListener(type, swallow, true);
   }
   window.addEventListener('click', (e) => {
-    if (!picker.active) return;
+    if (!picker.active || !e.isTrusted) return;
     swallow(e);
     const embed = shieldedAt(e.target);
     // An embedded document is picked as what surrounds it when the app cannot save it.

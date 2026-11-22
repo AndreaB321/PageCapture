@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Invisible embeds</title>
+<style>
+  body { margin: 0; }
+  main { height: 2000px; }
+  embed { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+  #transparent { opacity: 0; }
+  #hidden { visibility: hidden; }
+  #none { display: none; }
+  #empty { width: 0; height: 0; }
+  #away { left: -5000px; }
+</style>
+</head>
+<body>
+<main id="main"><h1>Invisible embeds</h1><p>Text under the embeds.</p></main>
+<embed id="transparent" type="application/pdf" src="https://documents.test/a.pdf">
+<embed id="hidden" type="application/pdf" src="https://documents.test/b.pdf">
+<embed id="none" type="application/pdf" src="https://documents.test/c.pdf">
+<embed id="empty" type="application/pdf" src="https://documents.test/d.pdf">
+<embed id="away" type="application/pdf" src="https://documents.test/e.pdf">
+</body>
+</html>
