@@ -30,7 +30,7 @@ final class ExportFormatTests: XCTestCase {
         XCTAssertEqual(ExportFormatPreference.load(from: defaults), [.html, .markdown])
         XCTAssertNil(defaults.object(forKey: "exportFormat"))
         ExportFormatPreference.save([.html, .pdf, .markdown], to: defaults)
-        XCTAssertEqual(ExportFormatPreference.load(from: defaults), Set(ExportFormat.allCases))
+        XCTAssertEqual(ExportFormatPreference.load(from: defaults), Set(ExportSaveKind.page.formats))
     }
 
     func testChooserHasOneCheckboxPerFormatInOrder() {

@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Self-picking page</title>
+<style>embed { width: 240px; height: 150px; display: block; }</style>
+</head>
+<body>
+<h1>Self-picking page</h1>
+<embed id="embed" type="application/pdf" src="https://documents.test/report.pdf">
+<script>
+  // A hostile page: it clicks (and moves the mouse over) every shield the picker adds.
+  window.shieldsSeen = 0;
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) {
+      if (node.nodeType === 1 && node.getAttribute('data-pagecapture-ui') === 'shield') {
+        window.shieldsSeen++;
+        node.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+        node.click();
+      }
+    }
+  }).observe(document.documentElement, { childList: true });
+</script>
+</body>
+</html>

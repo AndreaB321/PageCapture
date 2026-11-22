@@ -42,6 +42,7 @@ final class CaptureIntegrationTests: XCTestCase {
         let window = NSWindow(contentRect: webView.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = webView
+        window.acceptsMouseMovedEvents = true
         window.orderFrontRegardless()
         let picks = PickLog()
         bridge.onPick = { picks.targets.append($0) }
@@ -741,9 +742,7 @@ final class CaptureIntegrationTests: XCTestCase {
         harness.bridge.setPicking(true)
         defer { harness.bridge.setPicking(false) }
         try await Task.sleep(for: .milliseconds(100))
-        _ = try await evaluate("""
-            document.querySelector('\(selector)').dispatchEvent(new MouseEvent('mousemove', { bubbles: true })); 'ok'
-            """, in: harness, frame: nil)
+        try await mouse(in: harness, frame: nil, selector: selector, events: [.mouseMoved])
         return try await evaluate("""
             (() => {
               const o = document.querySelector('[data-pagecapture-ui]');
@@ -788,16 +787,46 @@ final class CaptureIntegrationTests: XCTestCase {
         let before = harness.picks.targets.count
         // Give the setPicking evaluations a moment to land in every frame.
         try await Task.sleep(for: .milliseconds(100))
-        _ = try await evaluate("""
-            (() => {
-              const el = document.querySelector('\(selector)');
-              el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              return 'ok';
-            })()
-            """, in: harness, frame: frame)
+        try await mouse(in: harness, frame: frame, selector: selector, events: [.mouseMoved, .leftMouseDown, .leftMouseUp])
         try await waitUntil("pick message") { harness.picks.targets.count > before }
         harness.bridge.setPicking(false)
+    }
+
+    /// Real (trusted) mouse events at the visible part of `selector` in `frame` (nil = main frame):
+    /// the picker ignores events a page dispatches itself.
+    private func mouse(in harness: Harness, frame: WKFrameInfo?, selector: String,
+                       events: [NSEvent.EventType]) async throws {
+        let inFrame = try await evaluate("""
+            (() => {
+              const el = document.querySelector('\(selector)');
+              // The mouse can only be over what is in view.
+              if (el.getBoundingClientRect().top >= innerHeight) el.scrollIntoView({ block: 'center' });
+              const r = el.getBoundingClientRect();
+              const x0 = Math.max(r.left, 0), x1 = Math.min(r.right, innerWidth);
+              const y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, innerHeight);
+              return ((x0 + x1) / 2) + ',' + ((y0 + y1) / 2);
+            })()
+            """, in: harness, frame: frame)
+        var point = try XCTUnwrap(inFrame).split(separator: ",").compactMap { Double($0) }
+        if frame != nil {
+            let origin = try await evaluate("""
+                (() => {
+                  const f = document.getElementById('frame');
+                  const r = f.getBoundingClientRect();
+                  return (r.left + f.clientLeft) + ',' + (r.top + f.clientTop);
+                })()
+                """, in: harness, frame: nil)
+            let offset = try XCTUnwrap(origin).split(separator: ",").compactMap { Double($0) }
+            point = [point[0] + offset[0], point[1] + offset[1]]
+        }
+        let location = NSPoint(x: point[0], y: harness.webView.bounds.height - point[1])
+        for type in events {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: harness.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            harness.window.sendEvent(event)
+            try await Task.sleep(for: .milliseconds(30))
+        }
     }
 
     private func evaluate(_ script: String, in harness: Harness, frame: WKFrameInfo?) async throws -> String? {

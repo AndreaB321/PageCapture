@@ -60,6 +60,8 @@ public final class PageCaptureBridge {
     private var isPicking = false
     /// What `collect(.picked)` collects (also when a picked document falls back to a page).
     private var picked: PickedArea?
+    /// Whether the pick is the whole page, for the result message when a document falls back to a page.
+    public var pickedWholePage: Bool { picked == .wholePage }
     /// The main frame's last response, so a page that is itself a document is one (see `pickWholePage()`).
     private var mainFrameResponse: (url: URL?, mimeType: String?)?
     private var collectingFrame: WKFrameInfo?
@@ -193,6 +195,12 @@ public final class PageCaptureBridge {
         picked = .wholePage
         guard let url = webView?.url else { return .picked(.wholePage) }
         let mimeType = mainFrameResponse.flatMap { Self.samePage($0.url, url) ? $0.mimeType : nil }
+        // A known type that is not a document type makes it a page, whatever its URL looks like
+        // (`…/blob/main/paper.pdf` served as HTML).
+        if let mimeType, !mimeType.isEmpty, DocumentKind(mimeType: mimeType) == nil,
+           DocumentKind.unsupportedMIMETypes[DocumentKind.essence(of: mimeType)] == nil {
+            return .picked(.wholePage)
+        }
         return Self.event(for: DocumentSource.detect(url: url, mimeType: mimeType)) ?? .picked(.wholePage)
     }
 

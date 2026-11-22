@@ -22,10 +22,6 @@ public enum ExportFormat: String, CaseIterable, Sendable {
     /// A document's original file, unchanged.
     case original
 
-    /// The page formats, in the panel's order: the page save panel and its callers predate
-    /// `.original`, which only documents offer (`ExportSaveKind.document.formats`).
-    public static var allCases: [ExportFormat] { ExportSaveKind.page.formats }
-
     public var title: String {
         switch self {
         case .html: "HTML"

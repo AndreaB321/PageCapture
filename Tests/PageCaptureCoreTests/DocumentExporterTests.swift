@@ -82,6 +82,14 @@ final class DocumentExporterTests: XCTestCase {
                       result.summary)
     }
 
+    func testWholePageFallbackSaysThePageWasCaptured() {
+        var result = ExportResult(folder: URL(fileURLWithPath: "/tmp/Name"), failedImages: [])
+        result.documentFallback = .httpStatus(403)
+        result.documentFallbackIsWholePage = true
+        XCTAssertEqual(result.summary,
+                       "Saved to /tmp/Name (the document could not be downloaded (HTTP 403), so the page was captured instead)")
+    }
+
     func testFallbackReasonIsInTheSummary() {
         var result = ExportResult(folder: URL(fileURLWithPath: "/tmp/Name"), failedImages: [])
         result.documentFallback = .httpStatus(403)
