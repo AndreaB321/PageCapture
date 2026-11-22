@@ -211,7 +211,6 @@ your capture folder.
   every format.
 - The PDF links to saved videos with their full location on your Mac, so they stop working if you
   move the capture folder. The HTML and Markdown links keep working because they are relative.
-- Very wide tables or code blocks are cut at the right margin of the PDF.
 - Pop-up windows for signing in and links that open a new window are not supported yet.
 - Quitting during a save stops the download tools and cleans up first.
 

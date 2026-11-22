@@ -67,7 +67,9 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   table whose rows each start with a short marker (✓, a number, a letter) or a small icon becomes
   a list (numbered markers give an ordered list), under its caption or title row.
 - PDF looks like the page: original styling, paginated (A4 or Letter per system locale), text
-  selectable, links clickable.
+  selectable, links clickable. Tables and code blocks wider than the page are fitted to the page
+  width: code lines wrap, table cells wrap their text, and a table that is still too wide (content
+  that cannot wrap) is scaled down. No text is cut at the right margin.
 
 ## Videos
 
