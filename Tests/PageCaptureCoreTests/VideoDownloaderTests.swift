@@ -348,7 +348,7 @@ final class VideoDownloaderTests: XCTestCase {
 /// A minimal HTTP/1.1 server on 127.0.0.1 serving fixed responses, one request per connection.
 final class FixtureHTTPServer: @unchecked Sendable {
     struct Request { var path: String; var headers: [String: String] }
-    private struct Route { var body: Data; var contentType: String; var requiresCookie: String? }
+    private struct Route { var body: Data; var contentType: String; var requiresCookie: String?; var location: String? }
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "FixtureHTTPServer")
@@ -392,6 +392,11 @@ final class FixtureHTTPServer: @unchecked Sendable {
         lock.withLock { routes[path] = Route(body: body, contentType: contentType, requiresCookie: requiresCookie) }
     }
 
+    /// `path` answers 302 to `location`.
+    func redirect(_ path: String, to location: String) {
+        lock.withLock { routes[path] = Route(body: Data(), contentType: "text/plain", location: location) }
+    }
+
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
         receive(connection, buffer: Data())
@@ -424,9 +429,12 @@ final class FixtureHTTPServer: @unchecked Sendable {
             recorded.append(Request(path: path, headers: headers))
             return routes[path]
         }
-        var status = "200 OK", body = Data(), type = "text/plain"
+        var status = "200 OK", body = Data(), type = "text/plain", extra = ""
         if let route {
-            if let cookie = route.requiresCookie, !(headers["cookie"] ?? "").contains(cookie) {
+            if let location = route.location {
+                status = "302 Found"
+                extra = "Location: \(location)\r\n"
+            } else if let cookie = route.requiresCookie, !(headers["cookie"] ?? "").contains(cookie) {
                 status = "403 Forbidden"
             } else {
                 body = route.body
@@ -435,7 +443,7 @@ final class FixtureHTTPServer: @unchecked Sendable {
         } else {
             status = "404 Not Found"
         }
-        let header = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(status)\r\n\(extra)Content-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }
 }

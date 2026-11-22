@@ -77,6 +77,19 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   selectable, links clickable. Tables and code blocks wider than the page are fitted to the page
   width: code lines wrap, table cells wrap their text, and a table that is still too wide (content
   that cannot wrap) is scaled down. No text is cut at the right margin.
+- Images, stylesheets (and their fonts and images), videos and documents are downloaded with the
+  cookies and Referer a browser sends for a subresource of the page, recomputed at every redirect:
+  - cookies: those of the browser that match the URL (domain, path, Secure, expiry); all of them
+    when the URL is same-site with the page, only `SameSite=None` ones when it is cross-site (no
+    SameSite counts as Lax; WebKit reports a cookie set without SameSite as `None`, so those are
+    sent cross-site, as WebKit itself does). Same-site compares the hosts' last two labels (the whole host for an IP
+    address), as there is no Public Suffix List: `a.example.co.uk` and `b.other.co.uk` count as
+    same-site.
+  - Referer: the page's full URL (without fragment) same-origin, its origin cross-origin, none from
+    an https page to an http URL. The page's own Referrer-Policy is not known, so this is the default
+    policy (`strict-origin-when-cross-origin`) for every page.
+  - once a redirect goes from https to http, no cookies and no Referer; a redirect to anything but
+    http(s) is not followed.
 
 ## Documents
 
@@ -90,10 +103,13 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   (`docs.google.com/viewer?url=<url>`, `docs.google.com/gview?url=<url>`,
   `drive.google.com/viewerng/viewer?url=<url>`). The original's URL is percent-decoded; a viewer
   inside a viewer is unwrapped once at most.
-- Nothing is scrolled. The app downloads the original with the browser's cookies and the page as
-  referer, up to 500 MB, and checks that the file is what its type says (a PDF starts with
+- Nothing is scrolled. The app downloads the original with the browser's cookies and Referer for
+  the page (see "Saving"), up to 500 MB, into a private temporary folder that is removed after the
+  save, when the save panel is cancelled, and when the app quits (during the download or with the
+  panel open), and checks that the file is what its type says (a PDF starts with
   `%PDF-`, `.docx`/`.pptx`/`.xlsx` are ZIP packages, `.xls`/`.msg` are OLE files).
-- Output: a folder `Name/` with `Name.<ext>` (the original, unchanged) and/or `Name.md` (its
+- Output: a folder `Name/` with `Name.<ext>` (the original, unchanged, quarantined as a web
+  download by PageCapture with its URL and the page's, like a browser download) and/or `Name.md` (its
   Markdown, made by the bundled MarkItDown in an isolated helper process). A scanned PDF (no text
   layer) is read with on-device text recognition.
 - A document with no readable text keeps the original (even when only Markdown was ticked), and
@@ -109,7 +125,8 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
 - During capture, each video in the target is found and its source recorded. Players that only
   load their stream on play are played briefly, muted, then paused and rewound; a player whose
   `<video>` only appears after clicking its play button gets that button clicked.
-- Saved into `videos/` next to `images/` (`001-<name>.mp4`), downloaded with the browser's cookies:
+- Saved into `videos/` next to `images/` (`001-<name>.mp4`), downloaded with the browser's cookies
+  and Referer for the video's frame (see "Saving"):
   - direct files (`.mp4`, `.webm`, `.mov`, …) as they are;
   - HLS streams (`.m3u8`): the app downloads the best variant (and its audio rendition) and the
     bundled ffmpeg joins it into `.mp4` without re-encoding; clear-key AES-128 is fine;

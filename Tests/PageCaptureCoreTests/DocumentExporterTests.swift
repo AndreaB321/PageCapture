@@ -1,3 +1,4 @@
+import CoreServices
 import XCTest
 @testable import PageCaptureCore
 
@@ -50,6 +51,25 @@ final class DocumentExporterTests: XCTestCase {
         try FileManager.default.removeItem(at: folder.appendingPathComponent("My Report"))
         _ = try await export("sheet.xlsx", .xlsx, formats: [.markdown])
         XCTAssertEqual(written, ["My Report.md"])
+    }
+
+    /// The saved original is quarantined as a web download by PageCapture. (The source and page URLs
+    /// go to LaunchServices' quarantine events, which do not give them back here, so they are not checked.)
+    func testTheOriginalIsQuarantined() async throws {
+        let source = URL(string: "https://documents.test/text.pdf")!
+        let page = URL(string: "https://site.test/page.html")!
+        let result = try await DocumentExporter.export(documents.appendingPathComponent("text.pdf"), kind: .pdf,
+                                                       formats: [.original], to: folder.appendingPathComponent("My Report"),
+                                                       downloadedFrom: source, page: page, converter: converter)
+        let original = try XCTUnwrap(result.original)
+        let size = getxattr(original.path, "com.apple.quarantine", nil, 0, 0, 0)
+        XCTAssertGreaterThan(size, 0, "com.apple.quarantine is set")
+        var value = [UInt8](repeating: 0, count: max(size, 0))
+        XCTAssertEqual(getxattr(original.path, "com.apple.quarantine", &value, value.count, 0, 0), size)
+        XCTAssertTrue(String(decoding: value, as: UTF8.self).hasPrefix("0081;"), String(decoding: value, as: UTF8.self))
+        let properties = try XCTUnwrap(try original.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties)
+        XCTAssertEqual(properties[kLSQuarantineAgentNameKey as String] as? String, "PageCapture")
+        XCTAssertEqual(properties[kLSQuarantineTypeKey as String] as? String, kLSQuarantineTypeWebDownload as String)
     }
 
     func testNoTextFoundKeepsTheOriginal() async throws {

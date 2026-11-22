@@ -1,3 +1,4 @@
+import CoreServices
 import Foundation
 
 /// Why a document's Markdown was not written; the original is kept instead.
@@ -17,17 +18,21 @@ public enum DocumentMarkdownFailure: Equatable, Sendable {
 }
 
 /// Saves a downloaded document (SPEC "Documents"): `folder/` gets `Name.<ext>` (the original,
-/// unchanged) and/or `Name.md`, where `Name` is the folder's name.
+/// unchanged, quarantined as a web download) and/or `Name.md`, where `Name` is the folder's name.
 public enum DocumentExporter {
     /// - Parameters:
     ///   - file: the downloaded original (`DownloadedDocument.file`); it is copied, not moved.
     ///   - formats: `.original` and/or `.markdown`. When the Markdown cannot be made, the original is
     ///     written even if it was not chosen.
+    ///   - source, page: where the original was downloaded from and the page that showed it, for
+    ///     its quarantine attribute (Gatekeeper and apps such as Office treat it as from the web).
     public static func export(
         _ file: URL,
         kind: DocumentKind,
         formats: Set<ExportFormat>,
         to folder: URL,
+        downloadedFrom source: URL? = nil,
+        page: URL? = nil,
         converter: DocumentConverter = DocumentConverter()
     ) async throws -> ExportResult {
         let fileManager = FileManager.default
@@ -52,9 +57,25 @@ public enum DocumentExporter {
             let url = folder.appendingPathComponent("\(name).\(kind.fileExtension)")
             if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
             try fileManager.copyItem(at: file, to: url)
+            // Best effort: a volume without extended attributes still gets the file.
+            try? quarantine(url, source: source, page: page)
             result.original = url
         }
         return result
+    }
+
+    /// Marks `url` as downloaded from the web by PageCapture.
+    static func quarantine(_ url: URL, source: URL?, page: URL?) throws {
+        var properties: [String: Any] = [
+            kLSQuarantineAgentNameKey as String: "PageCapture",
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String,
+        ]
+        if let source { properties[kLSQuarantineDataURLKey as String] = source }
+        if let page { properties[kLSQuarantineOriginURLKey as String] = page }
+        var values = URLResourceValues()
+        values.quarantineProperties = properties
+        var url = url
+        try url.setResourceValues(values)
     }
 
     /// A short reason for the result message, without paths.

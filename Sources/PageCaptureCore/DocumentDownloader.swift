@@ -1,10 +1,12 @@
 import Foundation
 
-/// A downloaded original, in a work folder of its own until `discard()`.
+/// A downloaded original, in a private work folder of its own until `discard()`.
 public struct DownloadedDocument: Equatable, Sendable {
-    /// `original.<ext>` inside the work folder.
+    /// `original.<ext>` (mode 0600) inside the work folder (mode 0700).
     public var file: URL
     public var source: DocumentSource
+    /// The page that showed the document, if known.
+    public var page: URL?
 
     /// Deletes the work folder (the exporter has copied what it needs).
     public func discard() {
@@ -12,16 +14,19 @@ public struct DownloadedDocument: Equatable, Sendable {
     }
 }
 
-/// Downloads a document's original with the browser's cookies and the page as referer (SPEC "Documents").
+/// Downloads a document's original with the browser's cookies and Referer for the page
+/// (`BrowserRequest`, SPEC "Documents").
 public enum DocumentDownloader {
     /// The largest original that is downloaded (the converter's input cap too).
     public static let maxBytes = 500 << 20
     private static let chunkSize = 1 << 16
 
-    /// Streams `source` into a new work folder under `temporaryRoot`.
+    /// Streams `source` into a new private work folder under `temporaryRoot`, which launch and quit
+    /// empty (`VideoDownloader.removeTemporaryFiles`).
     /// - Parameters:
     ///   - referer: the page that shows the document.
-    ///   - cookies: typically all of the web view's `httpCookieStore`; the request gets those matching its URL.
+    ///   - cookies: typically all of the web view's `httpCookieStore`; each request (redirects
+    ///     included) gets those a browser would send (`BrowserRequest`).
     ///   - configuration: base session configuration (tests add a `URLProtocol`).
     /// - Throws: `DocumentDownloadError` (`httpStatus`, `notADocument`, `tooLarge`, `failed`) or
     ///   `CancellationError`. Nothing is left behind when it throws.
@@ -31,29 +36,22 @@ public enum DocumentDownloader {
         cookies: [HTTPCookie],
         configuration: URLSessionConfiguration = .ephemeral,
         maxBytes: Int = DocumentDownloader.maxBytes,
-        temporaryRoot: URL = FileManager.default.temporaryDirectory
+        temporaryRoot: URL = VideoDownloader.defaultTemporaryRoot
     ) async throws -> DownloadedDocument {
         let config = configuration.copy() as! URLSessionConfiguration
-        // As in ImageDownloader: a private jar does the cookie matching, the header is set by hand.
-        let jar = URLSessionConfiguration.ephemeral.httpCookieStorage ?? HTTPCookieStorage()
-        for cookie in cookies { jar.setCookie(cookie) }
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 3600
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
 
-        var request = URLRequest(url: source.url)
-        if let referer { request.setValue(referer.absoluteString, forHTTPHeaderField: "Referer") }
-        request.httpShouldHandleCookies = false
-        for (field, value) in HTTPCookie.requestHeaderFields(with: jar.cookies(for: source.url) ?? []) {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
+        let browser = BrowserRequest(page: referer, cookies: cookies)
 
-        let folder = temporaryRoot.appendingPathComponent("PageCapture-Document-\(UUID().uuidString)", isDirectory: true)
+        let folder = temporaryRoot.appendingPathComponent("Document-\(UUID().uuidString)", isDirectory: true)
         let file = folder.appendingPathComponent("original.\(source.kind.fileExtension)")
         do {
-            try await stream(request, session: session, kind: source.kind, maxBytes: maxBytes, folder: folder, to: file)
-            return DownloadedDocument(file: file, source: source)
+            try await stream(browser.request(source.url), delegate: browser.redirects(), session: session,
+                             kind: source.kind, maxBytes: maxBytes, folder: folder, to: file)
+            return DownloadedDocument(file: file, source: source, page: referer)
         } catch {
             try? FileManager.default.removeItem(at: folder)
             if error is DocumentDownloadError || error is CancellationError { throw error }
@@ -63,19 +61,20 @@ public enum DocumentDownloader {
     }
 
     private static func stream(
-        _ request: URLRequest, session: URLSession, kind: DocumentKind, maxBytes: Int, folder: URL, to file: URL
+        _ request: URLRequest, delegate: URLSessionTaskDelegate, session: URLSession, kind: DocumentKind,
+        maxBytes: Int, folder: URL, to file: URL
     ) async throws {
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw DocumentDownloadError.httpStatus(http.statusCode)
         }
         if response.expectedContentLength > Int64(maxBytes) { throw DocumentDownloadError.tooLarge }
 
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        guard FileManager.default.createFile(atPath: file.path, contents: nil) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        let handle = try FileHandle(forWritingTo: file)
+        try VideoDownloader.makePrivateDirectory(folder.deletingLastPathComponent())
+        try VideoDownloader.makePrivateDirectory(folder)
+        let descriptor = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
 
         let magic = kind.magic

@@ -51,8 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard controller.isExporting || controller.isDownloadingDocument else { return .terminateNow }
         Task {
-            await controller.cancelDocumentDownload(waitingAtMost: .seconds(1))
+            // The export first: a document export removes its original as it stops.
             await controller.cancelExport(waitingAtMost: .seconds(3))
+            await controller.cancelDocumentDownload(waitingAtMost: .seconds(1))
             Tools.stopAllRunning()
             VideoDownloader.removeTemporaryFiles()
             sender.reply(toApplicationShouldTerminate: true)

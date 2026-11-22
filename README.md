@@ -216,6 +216,11 @@ To capture a page that needs an account, sign in inside PageCapture's own window
 browser. PageCapture keeps that sign-in for next time. It does not use the sign-ins of Safari or
 Chrome.
 
+Images, stylesheets, videos and documents are downloaded with the cookies the browser itself would
+send for them from that page, so a file on another site gets only the cookies that site allows
+across sites. A saved original document is marked as downloaded from the web, so macOS and apps
+such as Office treat it with the same care as a browser download.
+
 When saving videos from YouTube or Vimeo, only that site's own cookies are passed to the download
 tool, in a private temporary file that is deleted straight away. Nothing temporary is written into
 your capture folder.

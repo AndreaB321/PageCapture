@@ -15,6 +15,8 @@ final class CaptureControllerTests: XCTestCase {
     private var requests: [CaptureController.SaveRequest] = []
     private var formats: Set<ExportFormat> = []
     private var messages: [String] = []
+    /// The save panel, while a test keeps it open.
+    private var openPanel: CheckedContinuation<CaptureController.SaveChoice?, Never>?
 
     override func setUp() async throws {
         _ = NSApplication.shared
@@ -95,6 +97,33 @@ final class CaptureControllerTests: XCTestCase {
                       messages[0])
         let markdown = try String(contentsOf: folder.appendingPathComponent("Fallback/Fallback.md"), encoding: .utf8)
         XCTAssertTrue(markdown.contains("Fallback page"), markdown)
+    }
+
+    /// Quitting while the Save Document panel is open removes the downloaded original: the app's quit
+    /// path waits for `isDownloadingDocument` and calls `cancelDocumentDownload`.
+    func testQuittingWithTheSavePanelOpenRemovesTheDownloadedOriginal() async throws {
+        let temporaryRoot = folder.appendingPathComponent("tmp", isDirectory: true)
+        controller.documentTemporaryRoot = temporaryRoot
+        controller.savePanelOverride = { [unowned self] request in
+            requests.append(request)
+            return await withCheckedContinuation { openPanel = $0 }
+        }
+        let url = URL(string: "https://documents.test/report.pdf")!
+        controller.webView.loadHTMLString("<title>Report</title><h1>Report</h1>", baseURL: url)
+        try await waitUntil("page loaded") { !self.controller.webView.isLoading && self.controller.webView.url == url }
+
+        controller.send(.shortcut)
+        controller.send(.returnKey)
+        try await waitUntil("save panel") { self.openPanel != nil }
+        XCTAssertEqual(requests.map(\.kind), [.document])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: temporaryRoot.path).count, 1, "the original waits")
+        XCTAssertTrue(controller.isDownloadingDocument, "so quitting waits for its removal")
+
+        await controller.cancelDocumentDownload(waitingAtMost: .seconds(1))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: temporaryRoot.path), [])
+        XCTAssertFalse(controller.isDownloadingDocument)
+        openPanel?.resume(returning: nil)
+        try await waitUntil("idle") { self.controller.machine.phase == .idle }
     }
 
     private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: @MainActor () -> Bool) async throws {

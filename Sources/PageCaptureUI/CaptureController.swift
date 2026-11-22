@@ -19,11 +19,14 @@ public final class CaptureController {
     @ObservationIgnored private var documentDownload: Task<Void, Never>?
     /// Download tasks that have not ended yet, cancelled ones included (they remove their files as they end).
     @ObservationIgnored private var runningDownloads = 0
-    /// The downloaded original, from its download until the document save step takes it.
+    /// The downloaded original, from its download until it is discarded: after its save, when the
+    /// save panel is cancelled, or when the app quits (`cancelDocumentDownload`).
     @ObservationIgnored private var downloaded: DownloadedDocument?
 
     /// Base configuration of the document download; tests add a `URLProtocol`.
     @ObservationIgnored var documentSessionConfiguration = URLSessionConfiguration.ephemeral
+    /// Where the downloaded original waits; tests use their own folder.
+    @ObservationIgnored var documentTemporaryRoot = VideoDownloader.defaultTemporaryRoot
     @ObservationIgnored var documentConverter = DocumentConverter()
     /// Tests replace the save panel and the result message, which need a window.
     @ObservationIgnored var savePanelOverride: ((SaveRequest) async -> SaveChoice?)?
@@ -126,15 +129,16 @@ public final class CaptureController {
                                   kind: .document, original: document.source.kind)
         Task {
             guard let choice = await chooseSave(request) else {
-                document.discard()
+                discard(document)
                 send(.saveFinished)
                 return
             }
             exportTask = Task {
                 await finishExport(title: "Document saved", failure: "The document could not be saved.") {
-                    defer { document.discard() }
+                    defer { self.discard(document) }
                     return try await DocumentExporter.export(document.file, kind: document.source.kind,
                                                              formats: choice.formats, to: choice.folder,
+                                                             downloadedFrom: document.source.url, page: document.page,
                                                              converter: self.documentConverter)
                 }
             }
@@ -158,7 +162,8 @@ public final class CaptureController {
     /// A document is being downloaded, or waits in the save panel.
     public var isDownloadingDocument: Bool { runningDownloads > 0 || downloaded != nil }
 
-    /// Cancels a document download (quitting) and waits until its file is removed, or `limit` passed.
+    /// Cancels a document download (quitting) and waits until its file is removed, or `limit` passed;
+    /// removes a downloaded original that waits in the save panel or is being saved.
     public func cancelDocumentDownload(waitingAtMost limit: Duration) async {
         cancelDownload()
         let deadline = ContinuousClock.now + limit
@@ -238,13 +243,15 @@ public final class CaptureController {
         let referer = webView.url
         let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
         let configuration = documentSessionConfiguration
+        let temporaryRoot = documentTemporaryRoot
         runningDownloads += 1
         documentDownload = Task {
             defer { runningDownloads -= 1 }
             let cookies = await cookieStore.allCookies()
             do {
                 let document = try await DocumentDownloader.download(source, referer: referer, cookies: cookies,
-                                                                     configuration: configuration)
+                                                                     configuration: configuration,
+                                                                     temporaryRoot: temporaryRoot)
                 guard !Task.isCancelled else { return document.discard() }
                 documentDownload = nil
                 downloaded = document
@@ -263,6 +270,11 @@ public final class CaptureController {
         documentDownload = nil
         downloaded?.discard()
         downloaded = nil
+    }
+
+    private func discard(_ document: DownloadedDocument) {
+        document.discard()
+        if downloaded == document { downloaded = nil }
     }
 
     // MARK: Effects
@@ -292,10 +304,8 @@ public final class CaptureController {
         case .cancelDocumentDownload:
             cancelDownload()
         case .presentDocumentSave:
-            if let downloaded {
-                self.downloaded = nil
-                saveDocument(downloaded)
-            }
+            // Still tracked while the panel is open, so quitting removes it.
+            if let downloaded { saveDocument(downloaded) }
         }
     }
 

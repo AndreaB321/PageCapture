@@ -2,8 +2,8 @@ import Foundation
 
 /// Saves a capture's videos into `videos/` (SPEC "Videos") and says how each appears in the outputs.
 ///
-/// Direct files and HLS streams are fetched with the browser's cookies and the video's frame as
-/// Referer; HLS segments are joined by the bundled ffmpeg without re-encoding. YouTube and Vimeo
+/// Direct files and HLS streams are fetched with the browser's cookies and Referer for the video's
+/// frame (`BrowserRequest`); HLS segments are joined by the bundled ffmpeg without re-encoding. YouTube and Vimeo
 /// embeds go through the bundled yt-dlp. DRM-protected videos are never downloaded. Videos are
 /// processed one at a time, each within a time limit; one failure never stops the others.
 public enum VideoDownloader {
@@ -35,16 +35,14 @@ public enum VideoDownloader {
     ) async -> [Int: VideoLink] {
         guard !videos.isEmpty else { return [:] }
         let config = sessionConfiguration.copy() as! URLSessionConfiguration
-        // As in ImageDownloader: a private jar does the cookie matching, the header is set by hand.
-        let jar = URLSessionConfiguration.ephemeral.httpCookieStorage ?? HTTPCookieStorage()
-        for cookie in cookies { jar.setCookie(cookie) }
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = Double(timeLimit.components.seconds)
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
 
         let job = Job(
-            folder: folder, posters: posters, cookies: cookies, jar: jar, session: session, tools: tools,
+            folder: folder, posters: posters, cookies: cookies, browser: BrowserRequest(page: nil, cookies: cookies),
+            session: session, tools: tools,
             timeLimit: timeLimit, temporaryRoot: temporaryRoot,
             workRoot: temporaryRoot.appendingPathComponent(UUID().uuidString, isDirectory: true))
         var links = [Int: VideoLink]()
@@ -147,8 +145,8 @@ private struct Job: Sendable {
     let folder: URL
     let posters: [Int: String]
     let cookies: [HTTPCookie]
-    /// All of `cookies`, for matching each request's URL.
-    let jar: HTTPCookieStorage
+    /// All of `cookies`, for the requests' Cookie headers.
+    let browser: BrowserRequest
     let session: URLSession
     let tools: Tools
     let timeLimit: Duration
@@ -430,26 +428,23 @@ private struct Job: Sendable {
         return url
     }
 
-    private func request(_ url: URL, referer: String) -> URLRequest {
-        var request = URLRequest(url: url)
-        if !referer.isEmpty { request.setValue(referer, forHTTPHeaderField: "Referer") }
-        request.httpShouldHandleCookies = false
-        for (field, value) in HTTPCookie.requestHeaderFields(with: jar.cookies(for: url) ?? []) {
-            request.setValue(value, forHTTPHeaderField: field)
-        }
-        return request
+    /// Requests on behalf of the video's frame (`referer`, possibly empty).
+    private func browser(_ referer: String) -> BrowserRequest {
+        browser.onPage(referer.isEmpty ? nil : URL(string: referer))
     }
 
     /// Streams `url` to disk at `destination`.
     private func fetch(_ url: URL, referer: String, into destination: URL) async throws -> (URL, URLResponse) {
-        let (file, response) = try await session.download(for: request(url, referer: referer))
+        let browser = browser(referer)
+        let (file, response) = try await session.download(for: browser.request(url), delegate: browser.redirects())
         try moveReplacing(file, to: destination)
         try check(response, for: url, file: destination)
         return (destination, response)
     }
 
     private func fetchText(_ url: URL, referer: String) async throws -> String {
-        let (data, response) = try await session.data(for: request(url, referer: referer))
+        let browser = browser(referer)
+        let (data, response) = try await session.data(for: browser.request(url), delegate: browser.redirects())
         try check(response, for: url, file: nil)
         return String(decoding: data, as: UTF8.self)
     }
