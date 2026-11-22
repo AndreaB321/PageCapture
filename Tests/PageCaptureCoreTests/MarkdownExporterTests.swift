@@ -121,7 +121,20 @@ final class MarkdownExporterTests: XCTestCase {
 
     func testTildesThatWouldStrikeOrFenceStayText() async throws {
         let markdown = try await self.markdown(fromHTML: "<p>~~~</p><p>a ~~x~~ b, ~5 min</p>", images: [:])
-        XCTAssertEqual(markdown, "\\~\\~\\~\n\na \\~\\~x\\~\\~ b, ~5 min\n")
+        XCTAssertEqual(markdown, "\\~\\~\\~\n\na \\~\\~x\\~\\~ b, \\~5 min\n")
+    }
+
+    /// A lone `~` before a struck-through run would make `~~~` and open a code fence.
+    func testTildeBeforeStrikethroughDoesNotOpenAFence() async throws {
+        let markdown = try await self.markdown(fromHTML: "<p>~<del>gone</del> rest</p>", images: [:])
+        XCTAssertEqual(markdown, "\\~~~gone~~ rest\n")
+    }
+
+    func testNewlineInALinkURLCannotStartAHeadingOrList() async throws {
+        let markdown = try await self.markdown(fromHTML: """
+            <p><a href="mailto:a@b.c\n# Injected">mail</a> <a href="https://x.test/a\n- item">web</a></p>
+            """, images: [:])
+        XCTAssertEqual(markdown, "[mail](mailto:a@b.c%0A#%20Injected) [web](https://x.test/a%0A-%20item)\n")
     }
 
     func testBacktickFenceInTextStaysText() async throws {

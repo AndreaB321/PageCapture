@@ -299,6 +299,9 @@ public struct DocumentConverter: Sendable {
             from markitdown.converters._markdownify import _CustomMarkdownify
 
             _convert_a = _CustomMarkdownify.convert_a
+            # Control characters (a newline would start a new Markdown line), spaces, `<`, `>`,
+            # backslashes and parentheses are percent-encoded in a link's URL.
+            url_unsafe = re.compile(r"[\\x00-\\x20\\x7f<>\\\\()]")
 
             def convert_a(self, el, text, *args, **kwargs):
                 try:
@@ -306,6 +309,7 @@ public struct DocumentConverter: Sendable {
                 except ValueError:
                     scheme = None
                 if scheme in ("", "http", "https", "mailto", "tel"):
+                    el["href"] = url_unsafe.sub(lambda m: "%%%02X" % ord(m.group()), el.get("href") or "")
                     return markdownify.MarkdownConverter.convert_a(self, el, text, *args, **kwargs)
                 # MarkItDown's drops any other scheme but file, so never writes `javascript:`.
                 return _convert_a(self, el, text, *args, **kwargs)
@@ -322,7 +326,7 @@ public struct DocumentConverter: Sendable {
             _CustomMarkdownify.convert_td = table_cell(_CustomMarkdownify.convert_td)
             _CustomMarkdownify.convert_th = table_cell(_CustomMarkdownify.convert_th)
 
-            special = re.compile(r"[\\\\`*_\\[\\]]|<(?=[A-Za-z/!?])|~(?=~)|(?<=~)~")
+            special = re.compile(r"[\\\\`*_\\[\\]]|<(?=[A-Za-z/!?])|~")
             block_start = re.compile(r"^(\\s*)(#{1,6}(?:\\s|$)|>|(?:-+|=+|\\+)(?:\\s|$))")
             list_start = re.compile(r"^(\\s*\\d{1,9})([.)](?:\\s|$))")
             inline_only = {"h1", "h2", "h3", "h4", "h5", "h6", "td", "th"}

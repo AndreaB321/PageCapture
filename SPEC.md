@@ -64,13 +64,13 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   decides the content and its structure (the rules here), MarkItDown writes it, in the same
   isolated process as documents. Line breaks are kept (as `\` at the end of the line), code blocks
   keep their language, inline code stays on one line, and text that Markdown would read as markup
-  (a line starting with `1.`, `#`, `-` or a fence, `~~`, `<tag>`, and a `|` anywhere in a table
+  (every `~`, and a line starting with `1.`, `#`, `-` or a fence, `<tag>`, and a `|` anywhere in a table
   cell, also in its code, link URLs and image alt text) is escaped, so it stays text and the table
   keeps its columns. If the Markdown cannot be written (MarkItDown fails, or the page is nested too
   deeply for it), the other formats are still saved and the result message says why.
 - Markdown references images by relative path `images/<file>`; links (web, `mailto:` and `tel:`)
-  are kept as Markdown links with their absolute URLs as the page has them (only spaces and
-  parentheses are percent-encoded); `javascript:` links keep only their text.
+  are kept as Markdown links with their absolute URLs as the page has them (only control characters,
+  spaces, `<`, `>`, backslashes and parentheses are percent-encoded); `javascript:` links keep only their text.
 - Markdown writes text the page styles as a sub-heading (short, larger or bold-and-larger than the
   body text, not an `h1`-`h6`) as a heading, one level below the page's next larger heading. A
   table whose rows each start with a short marker (✓, a number, a letter) or a small icon becomes

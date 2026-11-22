@@ -116,7 +116,10 @@ public enum CaptureExporter {
                                                                videos: result.videos, converter: converter)
             } catch {
                 try Task.checkCancellation()
-                result.markdownFailure = error.localizedDescription
+                // Only a conversion error's message is written for the user; any other error can
+                // carry a type name or a path.
+                result.markdownFailure = (error as? DocumentConversionError)?.localizedDescription
+                    ?? "The Markdown converter failed."
                 markdown = nil
             }
             if let markdown {

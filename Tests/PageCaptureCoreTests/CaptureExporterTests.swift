@@ -307,6 +307,28 @@ final class CaptureExporterTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [])
     }
 
+    /// Cancelled while MarkItDown runs: the export throws instead of writing the other formats with a
+    /// Markdown failure. The page is large so the conversion outlasts the delay.
+    func testExportCancelledDuringMarkdownConversionThrows() async throws {
+        let tools = try markdownTools()
+        let folder = parent.appendingPathComponent("QuitMidway")
+        let html = String(repeating: "<p>Some <b>text</b> and <a href=\"https://x.test/\">a link</a>.</p>", count: 40_000)
+        let content = CapturedContent(html: html, baseURL: URL(string: "pctest://main.test/")!, title: "",
+                                      stylesheets: [], imageURLs: [])
+        let task = Task {
+            try await CaptureExporter.export(
+                content, formats: [.markdown, .pdf], to: folder, webViewConfiguration: PDFExporterTests.configuration,
+                sessionConfiguration: FixtureURLProtocol.configuration(), paperSize: .a4, tools: tools)
+        }
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        task.cancel()
+        do {
+            let result = try await task.value
+            XCTFail("expected CancellationError, got \(result)")
+        } catch is CancellationError {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("QuitMidway.pdf").path))
+    }
+
     func testVideosAreDownloadedAndCounted() async throws {
         let folder = parent.appendingPathComponent("Clips")
         let page = "pctest://main.test/"
