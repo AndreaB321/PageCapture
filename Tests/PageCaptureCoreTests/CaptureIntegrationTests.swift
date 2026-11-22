@@ -44,6 +44,7 @@ final class CaptureIntegrationTests: XCTestCase {
         window.contentView = webView
         window.acceptsMouseMovedEvents = true
         window.orderFrontRegardless()
+        window.makeKey()
         let picks = PickLog()
         bridge.onPick = { picks.targets.append($0) }
 
@@ -559,6 +560,8 @@ final class CaptureIntegrationTests: XCTestCase {
         XCTAssertEqual(lazySrc, "false", "the image has no source before it is scrolled into view")
 
         let highlight = try await highlighted(in: harness, hovering: "#s3 p")
+        // Hovering scrolled the page to the paragraph, as the mouse could only be over it in view.
+        let scrolledTo = try await evaluate("String(window.scrollY)", in: harness, frame: nil)
         let article = try await rect(of: "#article", in: harness)
         XCTAssertEqual(highlight, article, "the article is highlighted")
 
@@ -578,7 +581,7 @@ final class CaptureIntegrationTests: XCTestCase {
             XCTAssertFalse(content.html.contains(outside), "\(outside) is outside the article: \(content.html)")
         }
         let scrollY = try await evaluate("String(window.scrollY)", in: harness, frame: nil)
-        XCTAssertEqual(scrollY, "150", "the page's scroll position is restored")
+        XCTAssertEqual(scrollY, scrolledTo, "the page's scroll position is restored")
     }
 
     /// A scrolling area inside the article is the innermost target and is picked on its own; a click
@@ -819,14 +822,18 @@ final class CaptureIntegrationTests: XCTestCase {
             let offset = try XCTUnwrap(origin).split(separator: ",").compactMap { Double($0) }
             point = [point[0] + offset[0], point[1] + offset[1]]
         }
-        let location = NSPoint(x: point[0], y: harness.webView.bounds.height - point[1])
-        for type in events {
+        // A move that only makes the web view track the mouse, then the events at the point itself.
+        let steps: [(NSEvent.EventType, Double)] = [(.mouseMoved, 1)] + events.map { ($0, 0) }
+        for (type, offset) in steps {
+            let location = NSPoint(x: point[0] + offset, y: harness.webView.bounds.height - point[1] - offset)
             let event = try XCTUnwrap(NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: harness.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             harness.window.sendEvent(event)
             try await Task.sleep(for: .milliseconds(30))
         }
+        // The events reach the page by their own route, not the evaluations' queue.
+        try await Task.sleep(for: .milliseconds(150))
     }
 
     private func evaluate(_ script: String, in harness: Harness, frame: WKFrameInfo?) async throws -> String? {
