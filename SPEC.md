@@ -94,6 +94,9 @@ No banner while idle. The banner is an on-screen overlay clearly visible over th
   URL if given one) in `PageCapture.app/Contents/Resources/markitdown`, with `Contents/Helpers/markitdown`
   a symlink to it. It is the runtime for converting documents to Markdown, coming in a later version;
   nothing in the app uses it yet.
+- Documents are converted in isolated helper processes with no network and no access to the user's files.
+  Scanned PDFs are read with on-device text recognition (macOS Vision, fast mode) in a separate isolated
+  helper. Both are groundwork for a later version; nothing in the app uses them yet.
 
 ## Install
 

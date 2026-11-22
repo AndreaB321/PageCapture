@@ -9,6 +9,7 @@ APP_VERSION=0.1.0
 scripts/fetch-tools.sh
 
 swift build -c release --product PageCapture
+swift build -c release --product pagecapture-ocr
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
 APP="build/PageCapture.app"
@@ -16,6 +17,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers" \
     "$APP/Contents/Resources/ThirdPartyNotices"
 cp "$BIN_DIR/PageCapture" "$APP/Contents/MacOS/PageCapture"
+# The sandboxed OCR helper (signed with the other Helpers below).
+cp "$BIN_DIR/pagecapture-ocr" "$APP/Contents/Helpers/pagecapture-ocr"
 # The injected scripts; CaptureScripts looks in the main bundle's Resources first.
 cp Sources/PageCaptureCore/Resources/*.js "$APP/Contents/Resources/"
 cp Assets/AppIcon.icns Assets/header-avatar.png "$APP/Contents/Resources/"

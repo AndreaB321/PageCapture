@@ -164,8 +164,11 @@ public actor Tools {
         process.standardOutput = stdout
         process.standardError = stderr
         let exit = ExitStatus()
-        process.terminationHandler = { exit.exited($0.terminationStatus) }
         let running = RunningProcess()
+        process.terminationHandler = {
+            running.reaped()
+            exit.exited($0.terminationStatus)
+        }
 
         return try await withTaskCancellationHandler {
             try process.run()
@@ -223,12 +226,30 @@ final class RunningProcess: @unchecked Sendable {
     static var all: [RunningProcess] { registryLock.withLock { Array(registry.values) } }
 
     private let lock = NSLock()
-    /// The process group; 0 before launch and once the run has finished.
+    /// The process group; 0 before launch and once the run has finished or its group was killed.
     private var group: pid_t = 0
+    /// Whether the leader has been reaped: from then on its pid may be another process's, so only
+    /// its group is signalled, never the pid itself.
+    private var leaderReaped = false
 
     func launched(group: pid_t) {
         lock.withLock { self.group = group }
         Self.registryLock.withLock { Self.registry[ObjectIdentifier(self)] = self }
+    }
+
+    /// Called from `terminationHandler`, once the leader has been reaped.
+    func reaped() {
+        lock.withLock { leaderReaped = true }
+    }
+
+    /// SIGKILL to whatever is left in the group, and no signal after that. For runs where nothing
+    /// may outlive the leader; call it once the leader has exited.
+    func killGroup() {
+        lock.withLock {
+            guard group > 0 else { return }
+            killpg(group, SIGKILL)
+            group = 0
+        }
     }
 
     func finished() {
@@ -248,7 +269,8 @@ final class RunningProcess: @unchecked Sendable {
     func signal(_ sig: Int32) -> Bool {
         lock.withLock {
             guard group > 0 else { return false }
-            if killpg(group, sig) != 0 { Darwin.kill(group, sig) }
+            // The leader alone, if it left its group, while its pid is still its own.
+            if killpg(group, sig) != 0, !leaderReaped { Darwin.kill(group, sig) }
             return true
         }
     }
@@ -260,7 +282,7 @@ final class RunningProcess: @unchecked Sendable {
 }
 
 /// The exit status, delivered once from `terminationHandler` to whoever awaits it.
-private final class ExitStatus: @unchecked Sendable {
+final class ExitStatus: @unchecked Sendable {
     private let lock = NSLock()
     private var status: Int32?
     private var continuation: CheckedContinuation<Int32, Never>?
@@ -271,6 +293,10 @@ private final class ExitStatus: @unchecked Sendable {
             continuation?.resume(returning: status)
             continuation = nil
         }
+    }
+
+    var hasExited: Bool {
+        lock.withLock { status != nil }
     }
 
     func wait() async -> Int32 {
